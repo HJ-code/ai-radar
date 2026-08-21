@@ -1,0 +1,60 @@
+import type { AnalysisItemCtx } from './types.ts';
+import type { ChatMessage } from './client.ts';
+
+export interface ScopeCtx {
+  keywords: string[];
+  ranges: string[];
+}
+
+const SYSTEM_PROMPT = `你是一个 AI 热点「真伪鉴别 + 相关度评估 + 中文摘要」助手。请对给定的一条候选内容，依据证据链判断真伪：
+1) 账号可信度：作者是否官方/知名账号、是否疑似机器人/自动化营销号；
+2) 内容措辞：是否疑似戏仿、钓鱼、标题党、营销软文、蹭热度；
+3) 与已知事实/已有常识的冲突程度；
+4) 互动数据是否异常（如互动量与账号常规量级不匹配的暴涨）。
+
+判定规则：
+- 有可靠来源佐证、内容可信 → real；
+- 证据不足、无法确认其真实性时 → doubtful，不要无证据地指控为虚假；
+- 明显的戏仿/钓鱼/伪造/标题党营销/仿冒官方账号 → fake。
+
+随后：
+- relevance：该内容对给定「监控范围/关键词」的相关度，0-100 的整数（主题无关给低分）；
+- summary：≤60 字的客观中文摘要；
+- reasons：一句简短判定理由（中文，≤30字）。
+
+只输出一个 JSON 对象，不要输出任何其他文字或代码块标记：
+{"verdict": "real|doubtful|fake", "relevance": 0到100的整数, "summary": "中文摘要", "reasons": "判定理由"}`;
+
+/** 把一条候选内容 + 监控范围组装成两轮对话，供单次请求完成真伪/相关/摘要三道关 */
+export function buildAnalysisMessages(item: AnalysisItemCtx, scope: ScopeCtx): ChatMessage[] {
+  const topics = [...scope.keywords, ...scope.ranges].filter(Boolean).join('、') || '（无）';
+  const engagement = describeEngagement(item.engagementJson);
+  const user = [
+    `标题：${item.title ?? '（无）'}`,
+    `正文：${(item.text ?? '').slice(0, 1200) || '（无）'}`,
+    `作者：${item.author ?? '（未知）'}`,
+    `来源：${item.sourceKey ?? '（未知）'}`,
+    `发布时间：${item.publishedAt ?? '（未知）'}`,
+    `互动数据：${engagement}`,
+    `原文URL：${item.url ?? '（无）'}`,
+    '',
+    `监控范围/关键词：${topics}`,
+  ].join('\n');
+
+  return [
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'user', content: user },
+  ];
+}
+
+function describeEngagement(engagementJson?: string): string {
+  try {
+    const obj = JSON.parse(engagementJson ?? '{}') as Record<string, unknown>;
+    const nums = Object.entries(obj)
+      .filter(([, v]) => typeof v === 'number')
+      .map(([k, v]) => `${k}=${v}`);
+    return nums.length ? nums.join(', ') : '无';
+  } catch {
+    return '无';
+  }
+}

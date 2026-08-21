@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+@theme {
+  --color-abyss: #05070f;
+  --color-panel: #0a1220;
+  --color-panel2: #0d1526;
+  --color-line: #1c2a44;
+  --color-neon: #38e8ff;
+  --color-cyan: #22d3ee;
+  --color-signal: #34d399;
+  --color-warn: #fbbf24;
+  --color-danger: #fb7185;
+  --font-mono2: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1200px 600px at 70% -10%, rgba(56, 232, 255, 0.08), transparent 60%),
+    radial-gradient(900px 500px at 8% 110%, rgba(52, 211, 153, 0.06), transparent 60%),
+    #05070f;
+  color: #cfe0f3;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 网格背景 */
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(56, 232, 255, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(56, 232, 255, 0.055) 1px, transparent 1px);
+  background-size: 34px 34px;
+}
+
+.glow-text { text-shadow: 0 0 12px currentColor; }
+
+.panel {
+  background: linear-gradient(180deg, rgba(13, 21, 38, 0.92), rgba(10, 18, 32, 0.96));
+  border: 1px solid #1c2a44;
+}
+
+@keyframes sweep {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.radar-sweep {
+  animation: sweep 4.5s linear infinite;
+}
+
+@keyframes pulseBlip {
+  0%   { transform: scale(1);   opacity: 1; }
+  70%  { transform: scale(1.9); opacity: 0; }
+  100% { transform: scale(1.9); opacity: 0; }
+}
+
+.blip { position: absolute; border-radius: 9999px; }
+
+@keyframes tickerScroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+.ticker-track {
+  animation-name: tickerScroll;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+.ticker-track:hover { animation-play-state: paused; }
+
+@media (prefers-reduced-motion: reduce) {
+  .radar-sweep, .ticker-track {
+    animation: none;
+  }
+}
+
+/* 细滚动条，贴合指挥室风格 */
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: #1c2a44; border-radius: 4px; }
+*::-webkit-scrollbar-thumb:hover { background: #24375a; }
