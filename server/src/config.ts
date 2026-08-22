@@ -24,6 +24,7 @@ export const config = {
     baseUrl: (process.env.AI_BASE_URL ?? '').trim(),
     apiKey: (process.env.AI_API_KEY ?? '').trim(),
     model: (process.env.AI_MODEL ?? '').trim(),
+    enabled: (process.env.AI_ENABLED ?? '1') !== '0',
     timeoutMs: Number(process.env.AI_TIMEOUT_MS ?? 15_000),
     minRelevance: Number(process.env.AI_MIN_RELEVANCE ?? 55),
     maxPerRun: Number(process.env.AI_MAX_PER_RUN ?? 20),

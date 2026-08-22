@@ -1,14 +1,23 @@
+import { motion } from 'framer-motion';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { collectNow, getAiSystem, getHealth, getHotspots } from './api/client.ts';
+import { collectNow, getAiSystem, getAlerts, getHealth, getHotspots, testNotify } from './api/client.ts';
 import { usePoll } from './hooks/usePoll.ts';
 import { useStream } from './hooks/useStream.ts';
 import { getNotificationPermission, requestNotificationPermission, showBrowserNotification } from './util/notify.ts';
+import { BackgroundBeams } from './components/ui/BackgroundBeams.tsx';
+import { Particles } from './components/ui/Particles.tsx';
+import { BellPanel } from './components/BellPanel.tsx';
 import StatusBar from './components/StatusBar.tsx';
 import Ticker from './components/Ticker.tsx';
 import Dashboard from './pages/Dashboard.tsx';
 import Config from './pages/Config.tsx';
 
 type Tab = 'radar' | 'config';
+
+const TABS: [Tab, string][] = [
+  ['radar', '雷达扫描'],
+  ['config', '监控配置'],
+];
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('radar');
@@ -18,13 +27,16 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [unread, setUnread] = useState(0);
   const [permission, setPermission] = useState(() => getNotificationPermission());
+  const [feedLimit, setFeedLimit] = useState(30);
+  const [bellOpen, setBellOpen] = useState(false);
+  const [notifyBusy, setNotifyBusy] = useState(false);
   const noticeTimer = useRef<number | undefined>(undefined);
 
   const healthPoll = usePoll(getHealth, 30000);
   const aiPoll = usePoll(getAiSystem, 30000);
-  const hotspotsPoll = usePoll(() => getHotspots(30), 8000);
+  const alertsPoll = usePoll(() => getAlerts(10), 15000, []);
+  const hotspotsPoll = usePoll(() => getHotspots(feedLimit), 8000, [feedLimit]);
 
-  // 顶栏时钟
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
@@ -36,7 +48,6 @@ export default function App() {
     noticeTimer.current = window.setTimeout(() => setNotice(null), 3500);
   }, []);
 
-  // SSE 告警 → 未读角标 + 浏览器通知 + 站内提示
   useStream(
     useCallback((a) => {
       setUnread((c) => c + 1);
@@ -45,16 +56,26 @@ export default function App() {
     }, []),
   );
 
-  async function handleBell() {
-    if (permission === 'unsupported') {
-      pushNotice('当前环境不支持浏览器通知（需 HTTPS 或 localhost）');
-      return;
-    }
-    const p = await requestNotificationPermission();
-    setPermission(p);
+  function handleBell() {
+    setBellOpen((o) => !o);
     setUnread(0);
-    if (p === 'granted') pushNotice('浏览器通知已开启');
-    else if (p === 'denied') pushNotice('通知被拒绝，可在浏览器地址栏旁重新允许');
+    // 未授权时顺带请求权限
+    if (permission === 'default') {
+      void requestNotificationPermission().then((p) => setPermission(p));
+    }
+  }
+
+  async function runBellTest() {
+    setNotifyBusy(true);
+    try {
+      const r = await testNotify();
+      pushNotice(r.ok ? '测试通知已发出，请查看浏览器通知与铃铛角标' : `测试通知失败：${r.error ?? '未知错误'}`);
+      alertsPoll.reload();
+    } catch (e) {
+      pushNotice(`测试通知失败：${(e as Error).message}`);
+    } finally {
+      setNotifyBusy(false);
+    }
   }
 
   const bellTitle =
@@ -81,60 +102,87 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <StatusBar
-        health={healthPoll.data}
-        ai={aiPoll.data}
-        now={now}
-        collecting={collecting}
-        onCollect={handleCollect}
-        lastError={healthPoll.error}
-        unread={unread}
-        onBell={handleBell}
-        bellTitle={bellTitle}
-      />
+    <>
+      <div className="aurora" />
+      <BackgroundBeams className="fixed inset-0 z-0" />
+      <Particles />
+      <div className="relative z-10 h-screen flex flex-col overflow-y-auto pb-16">
+        <StatusBar
+          health={healthPoll.data}
+          ai={aiPoll.data}
+          now={now}
+          collecting={collecting}
+          onCollect={handleCollect}
+          lastError={healthPoll.error}
+          unread={unread}
+          onBell={handleBell}
+          bellTitle={bellTitle}
+        />
 
-      {notice && (
-        <div className="fixed top-14 left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-lg border border-neon/40 bg-panel/95 text-sm text-neon shadow-[0_0_20px_rgba(56,232,255,0.25)]">
-          {notice}
-        </div>
-      )}
-
-      {/* 导航标签 */}
-      <nav className="max-w-[1400px] mx-auto w-full px-4 flex gap-1 pt-2">
-        {(
-          [
-            ['radar', '雷达扫描'],
-            ['config', '监控配置'],
-          ] as [Tab, string][]
-        ).map(([k, label]) => (
-          <button
-            key={k}
-            onClick={() => setTab(k)}
-            className={`px-4 py-1.5 text-sm tracking-wider border-b-2 transition-colors ${
-              tab === k ? 'border-neon text-neon' : 'border-transparent text-slate-500 hover:text-slate-300'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
-
-      <main className="flex-1 max-w-[1400px] mx-auto w-full px-4 pt-3 pb-8">
-        {tab === 'radar' ? (
-          <Dashboard hotspots={hotspotsPoll.data ?? []} refreshKey={refreshKey} onNotice={pushNotice} />
-        ) : (
-          <Config refreshKey={refreshKey} onNotice={pushNotice} />
+        {bellOpen && (
+          <BellPanel
+            alerts={alertsPoll.data ?? []}
+            permission={permission}
+            onEnable={() => void requestNotificationPermission().then((p) => setPermission(p))}
+            onTest={runBellTest}
+            testBusy={notifyBusy}
+            onClose={() => setBellOpen(false)}
+          />
         )}
-      </main>
 
-      {/* 底部行情条 */}
-      <footer className="sticky bottom-0 border-t border-line/70 bg-abyss/85 backdrop-blur px-4 py-2">
-        <div className="max-w-[1400px] mx-auto flex items-center gap-4">
-          <span className="font-mono2 text-[11px] text-neon shrink-0">▚ TICKER</span>
-          <Ticker hotspots={hotspotsPoll.data ?? []} />
-        </div>
-      </footer>
-    </div>
+        {notice && (
+          <div className="fixed top-14 left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-lg glass-strong text-sm text-neon shadow-[0_0_24px_rgba(56,232,255,0.28)]">
+            {notice}
+          </div>
+        )}
+
+        {/* 导航 */}
+        <nav className="max-w-[1400px] mx-auto w-full px-4 flex gap-1 pt-3">
+          {TABS.map(([k, label]) => {
+            const active = tab === k;
+            return (
+              <button
+                key={k}
+                onClick={() => setTab(k)}
+                className={`relative px-4 py-1.5 text-sm cursor-pointer transition-colors ${
+                  active ? 'text-neon' : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                <span className="hud-label text-[11px]">{label}</span>
+                {active && (
+                  <motion.span
+                    layoutId="nav-underline"
+                    className="absolute inset-x-1 -bottom-px h-0.5 rounded-full bg-neon shadow-[0_0_10px_#38e8ff]"
+                    transition={{ type: 'spring', bounce: 0.25, duration: 0.55 }}
+                  />
+                )}
+              </button>
+            );
+          })}
+        </nav>
+
+        <main className="flex-1 max-w-[1400px] mx-auto w-full px-4 pt-4 pb-2">
+          {tab === 'radar' ? (
+            <Dashboard
+              hotspots={hotspotsPoll.data ?? []}
+              refreshKey={refreshKey}
+              onNotice={pushNotice}
+              feedLimit={feedLimit}
+              onFeedLimit={setFeedLimit}
+            />
+          ) : (
+            <Config refreshKey={refreshKey} onNotice={pushNotice} />
+          )}
+        </main>
+
+        {/* 底部行情条：fixed 常驻视口最底部；内容底部已由壳层 pb-16 预留空隙避免遮挡 */}
+        <footer className="fixed bottom-0 inset-x-0 z-20 border-t border-white/10 bg-abyss/90 backdrop-blur-2xl px-4 py-2.5">
+          <div className="max-w-[1400px] mx-auto flex items-center gap-4">
+            <span className="hud-label text-[10px] text-neon shrink-0">▚ TICKER</span>
+            <Ticker hotspots={hotspotsPoll.data ?? []} />
+          </div>
+        </footer>
+      </div>
+    </>
   );
 }

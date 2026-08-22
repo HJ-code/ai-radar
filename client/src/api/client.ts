@@ -26,6 +26,11 @@ export const getSources = () => api<Source[]>('/api/sources');
 export const getKeywords = () => api<Keyword[]>('/api/keywords');
 export const getRanges = () => api<Range[]>('/api/ranges');
 export const getAiSystem = () => api<AiSystem>('/api/system/ai');
+export const setAiEnabled = (enabled: boolean) =>
+  api<{ ok: boolean; enabled: boolean } & AiSystem>('/api/system/ai/enabled', {
+    method: 'POST',
+    body: JSON.stringify({ enabled }),
+  });
 export const getAlerts = (limit = 30) => api<AlertLog[]>(`/api/alerts?limit=${limit}`);
 export const testNotify = () =>
   api<{ ok: boolean; result?: { channels: string[]; failed: string[] }; error?: string }>('/api/alerts/notify/test', {

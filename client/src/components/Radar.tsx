@@ -36,7 +36,7 @@ function toBlips(hotspots: Hotspot[], nowMs: number): Blip[] {
   });
 }
 
-export default function Radar({ hotspots, count }: { hotspots: Hotspot[]; count: number }) {
+export default function Radar({ hotspots, count, compact }: { hotspots: Hotspot[]; count: number; compact?: boolean }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 5000);
@@ -46,21 +46,22 @@ export default function Radar({ hotspots, count }: { hotspots: Hotspot[]; count:
   const blips = useMemo(() => toBlips(hotspots, now), [hotspots, now]);
 
   return (
-    <div className="relative aspect-square w-full max-w-[430px] mx-auto select-none">
-      <div className="absolute inset-0 rounded-full border border-line/70 overflow-hidden grid-bg">
+    <div className="w-full max-w-[430px] mx-auto select-none">
+      <div className="relative aspect-square">
+        <div className="absolute inset-0 rounded-full border border-white/10 overflow-hidden grid-bg">
         {/* concentric rings */}
         {[20, 40, 60, 80, 97].map((p) => (
-          <div key={p} className="absolute rounded-full border border-line/40" style={{ inset: `${(100 - p) / 2}%` }} />
+          <div key={p} className="absolute rounded-full border border-white/[0.06]" style={{ inset: `${(100 - p) / 2}%` }} />
         ))}
         {/* cross lines */}
-        <div className="absolute left-1/2 top-0 bottom-0 w-px bg-line/40" />
-        <div className="absolute top-1/2 left-0 right-0 h-px bg-line/40" />
+        <div className="absolute left-1/2 top-0 bottom-0 w-px bg-white/5" />
+        <div className="absolute top-1/2 left-0 right-0 h-px bg-white/5" />
         {/* rotating sweep */}
         <div
           className="absolute inset-0 radar-sweep"
           style={{
             background:
-              'conic-gradient(from 0deg, rgba(56,232,255,0.34), rgba(56,232,255,0.05) 55deg, transparent 130deg)',
+              'conic-gradient(from 0deg, rgba(56,232,255,0.32), rgba(56,232,255,0.05) 55deg, transparent 130deg)',
           }}
         />
         {/* outer pulse ring */}
@@ -85,20 +86,24 @@ export default function Radar({ hotspots, count }: { hotspots: Hotspot[]; count:
         {/* center */}
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-center pointer-events-none">
           <div className="text-[10px] tracking-[0.3em] text-neon/80 uppercase">Trend Radar</div>
-          <div className="font-mono2 text-2xl text-neon glow-text">{count ? `${count}` : '···'}</div>
-          <div className="text-[10px] text-slate-500">{`${MAX_BLIPS} BLIPS / 12H`}</div>
+          <div className={`font-mono2 ${compact ? 'text-xl' : 'text-2xl'} text-neon glow-text`}>{count ? `${count}` : '···'}</div>
+          {!compact && <div className="text-[10px] text-slate-500">{`${MAX_BLIPS} BLIPS / 12H`}</div>}
         </div>
       </div>
 
-      {/* legend */}
-      <div className="absolute -bottom-9 left-1/2 -translate-x-1/2 flex gap-4 font-mono2 text-[10px] text-slate-400">
-        {(Object.keys(AI_STATUS_META) as (keyof typeof AI_STATUS_META)[]).map((k) => (
-          <span key={k} className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full" style={{ background: AI_STATUS_META[k].color, boxShadow: `0 0 6px ${AI_STATUS_META[k].color}` }} />
-            {AI_STATUS_META[k].label}
-          </span>
-        ))}
       </div>
+
+      {/* legend */}
+      {!compact && (
+        <div className="mt-6 flex flex-wrap justify-center gap-4 font-mono2 text-[10px] text-slate-400">
+          {(Object.keys(AI_STATUS_META) as (keyof typeof AI_STATUS_META)[]).map((k) => (
+            <span key={k} className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full" style={{ background: AI_STATUS_META[k].color, boxShadow: `0 0 6px ${AI_STATUS_META[k].color}` }} />
+              {AI_STATUS_META[k].label}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

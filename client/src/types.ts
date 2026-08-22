@@ -67,6 +67,7 @@ export interface Hotspot {
 
 export interface AiSystem {
   configured: boolean;
+  enabled: boolean;
   baseUrl: string;
   model: string;
   apiKeyPresent: boolean;

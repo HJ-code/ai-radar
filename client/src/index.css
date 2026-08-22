@@ -10,10 +10,12 @@
   --color-signal: #34d399;
   --color-warn: #fbbf24;
   --color-danger: #fb7185;
+  --color-lime: #a3e635;
   --font-mono2: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 html, body, #root { height: 100%; }
+html, body { overflow-x: hidden; }
 
 body {
   margin: 0;
@@ -81,3 +83,123 @@ body {
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb { background: #1c2a44; border-radius: 4px; }
 *::-webkit-scrollbar-thumb:hover { background: #24375a; }
+
+/* ---------- V2 主题：玻璃 + HUD ---------- */
+
+/* 极光背景层：给玻璃面板提供「可虚化」的渐变光斑 */
+.aurora {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(58% 42% at 12% 16%, rgba(52, 211, 153, 0.14), transparent 62%),
+    radial-gradient(48% 38% at 88% 10%, rgba(56, 232, 255, 0.16), transparent 60%),
+    radial-gradient(52% 44% at 80% 86%, rgba(129, 140, 248, 0.12), transparent 62%),
+    radial-gradient(44% 38% at 22% 90%, rgba(163, 230, 53, 0.08), transparent 60%);
+}
+
+/* 玻璃面板（Aceternity 风）——更透：低不透明 + 高模糊 */
+.glass {
+  background: linear-gradient(
+    165deg,
+    rgba(255, 255, 255, 0.07) 0%,
+    rgba(255, 255, 255, 0.02) 45%,
+    rgba(255, 255, 255, 0.045) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  backdrop-filter: blur(24px) saturate(170%);
+  -webkit-backdrop-filter: blur(24px) saturate(170%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    0 8px 28px rgba(0, 0, 0, 0.30);
+}
+
+.glass-strong {
+  background: linear-gradient(
+    160deg,
+    rgba(255, 255, 255, 0.09) 0%,
+    rgba(255, 255, 255, 0.02) 48%,
+    rgba(255, 255, 255, 0.06) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(30px) saturate(170%);
+  -webkit-backdrop-filter: blur(30px) saturate(170%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 12px 40px rgba(0, 0, 0, 0.38);
+}
+
+/* 渐变文字（绿→青） */
+.grad-text {
+  background: linear-gradient(92deg, #4ade80, #22d3ee 60%, #818cf8);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* 渐变描边卡片：实底 padding-box + 渐变 border-box */
+.grad-border {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(rgba(6, 11, 24, 0.82), rgba(6, 11, 24, 0.82)) padding-box,
+    linear-gradient(135deg, rgba(52, 211, 153, 0.55), rgba(56, 232, 255, 0.55), rgba(129, 140, 248, 0.4)) border-box;
+}
+
+/* HUD 数字 / 标签：等宽 + 放大字距 */
+.hud-display {
+  font-family: var(--font-mono2);
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+.hud-label {
+  font-family: var(--font-mono2);
+  letter-spacing: 0.32em;
+}
+
+/* BorderBeam 旋转光束 */
+@keyframes border-beam {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* BackgroundBeams 横向漂移 */
+@keyframes beam-float {
+  from { transform: translateX(-3%); }
+  to   { transform: translateX(3%); }
+}
+.beam-float {
+  animation-name: beam-float;
+  animation-duration: 30s;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+}
+
+/* 微粒子：自下而上缓慢上浮 + 闪烁 */
+.particle {
+  position: absolute;
+  bottom: -10px;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.85), rgba(163, 230, 53, 0.55));
+  animation-name: particle-rise;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+@keyframes particle-rise {
+  0%   { transform: translateY(0);        opacity: 0; }
+  8%   { opacity: var(--p-op, 0.5); }
+  85%  { opacity: calc(var(--p-op, 0.5) * 0.8); }
+  100% { transform: translateY(-108vh);   opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .radar-sweep, .ticker-track, .beam-float, .particle, [style*="border-beam"] {
+    animation: none !important;
+  }
+  .particle { opacity: 0; }
+  html { scroll-behavior: auto; }
+}
+
+html { scroll-behavior: smooth; }

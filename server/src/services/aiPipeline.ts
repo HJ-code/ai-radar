@@ -4,6 +4,7 @@ import type { ItemRow } from '../repositories/types.ts';
 import { insertHotspotIfAbsent } from '../repositories/hotspots.ts';
 import { listEnabledKeywords, markKeywordTriggered } from '../repositories/keywords.ts';
 import { listEnabledRanges } from '../repositories/ranges.ts';
+import { getSetting, setSetting } from '../repositories/settings.ts';
 import { AiClient, AiError } from '../ai/client.ts';
 import { buildAnalysisMessages, type ScopeCtx } from '../ai/prompts.ts';
 import type { AiAnalysis, AiVerdict, AnalysisItemCtx } from '../ai/types.ts';
@@ -19,6 +20,7 @@ export const aiRuntime = { lastRunAt: 0 };
 
 export interface AiStatusInfo {
   configured: boolean;
+  enabled: boolean;
   baseUrl: string;
   model: string;
   apiKeyPresent: boolean;
@@ -30,12 +32,35 @@ export interface AiStatusInfo {
 }
 
 const AI_MAX_STREAK = 3;
+const AI_ENABLED_SETTING = 'ai_runtime_enabled';
 let failStreak = 0;
 let client: AiClient | null | undefined;
+let runtimeEnabled: boolean | null = null;
+
+/**
+ * AI 运行时开关（面板可调，持久化到 settings 表；首次读取时以 DB > .env 为优先）。
+ * 关闭后 getClient 返回 null，流水线自动降级为规则模式，零外部调用。
+ */
+function effectiveEnabled(): boolean {
+  if (runtimeEnabled === null) {
+    const persisted = getSetting(AI_ENABLED_SETTING);
+    runtimeEnabled = persisted === null ? config.ai.enabled : persisted === '1';
+  }
+  return runtimeEnabled;
+}
+
+export function isAiEnabled(): boolean {
+  return effectiveEnabled();
+}
+
+export function setAiEnabled(v: boolean): void {
+  runtimeEnabled = v;
+  setSetting(AI_ENABLED_SETTING, v ? '1' : '0');
+}
 
 function getClient(): AiClient | null {
   const { baseUrl, apiKey, model } = config.ai;
-  if (!baseUrl || !apiKey || !model) return null;
+  if (!effectiveEnabled() || !baseUrl || !apiKey || !model) return null;
   if (client === undefined) {
     client = new AiClient({ baseUrl, apiKey, model, timeoutMs: config.ai.timeoutMs });
   }
@@ -43,9 +68,10 @@ function getClient(): AiClient | null {
 }
 
 export function aiStatus(): AiStatusInfo {
-  const c = getClient();
+  const creds = Boolean(config.ai.baseUrl && config.ai.apiKey && config.ai.model);
   return {
-    configured: Boolean(c),
+    configured: creds,
+    enabled: effectiveEnabled(),
     baseUrl: config.ai.baseUrl || '',
     model: config.ai.model || '',
     apiKeyPresent: Boolean(config.ai.apiKey),
