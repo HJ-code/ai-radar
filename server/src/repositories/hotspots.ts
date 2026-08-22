@@ -51,16 +51,32 @@ export function insertHotspotIfAbsent(h: NewHotspot): { inserted: boolean; id: n
   return { inserted: info.changes > 0, id: Number(info.lastInsertRowid) };
 }
 
-export function listHotspots(filter: { limit?: number; rangeName?: string; status?: string } = {}): HotspotRow[] {
+export function listHotspots(
+  filter: {
+    limit?: number;
+    rangeName?: string;
+    status?: string;
+    /** keyset 游标：翻页取更早的一批（publishedAt|hotScore|id） */
+    before?: { publishedAt: string; hotScore: number; id: number } | null;
+  } = {},
+): HotspotRow[] {
   const conds: string[] = [];
   const params: Record<string, unknown> = {};
   if (filter.rangeName) { conds.push('range_name = :rn'); params.rn = filter.rangeName; }
   if (filter.status) { conds.push('ai_status = :st'); params.st = filter.status; }
+  if (filter.before) {
+    conds.push(
+      '(published_at < :bpa OR (published_at = :bpa AND (hot_score < :bhs OR (hot_score = :bhs AND id < :bid))))',
+    );
+    params.bpa = filter.before.publishedAt;
+    params.bhs = filter.before.hotScore;
+    params.bid = filter.before.id;
+  }
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
   const limit = Math.min(200, filter.limit ?? 50);
-  const rows = db.prepare(`SELECT * FROM hotspots ${where} ORDER BY published_at DESC, hot_score DESC LIMIT :lim`).all({
-    ...params, lim: limit,
-  });
+  const rows = db
+    .prepare(`SELECT * FROM hotspots ${where} ORDER BY published_at DESC, hot_score DESC, id DESC LIMIT :lim`)
+    .all({ ...params, lim: limit });
   return rows.map((r) => mapHotspot(r as Record<string, unknown>));
 }
 
