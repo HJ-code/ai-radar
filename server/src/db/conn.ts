@@ -90,6 +90,11 @@ CREATE TABLE IF NOT EXISTS alert_logs (
   triggered_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT ''
+);
+
 CREATE INDEX IF NOT EXISTS idx_items_published  ON items(published_at);
 CREATE INDEX IF NOT EXISTS idx_items_query      ON items(query);
 CREATE INDEX IF NOT EXISTS idx_hotspots_published ON hotspots(published_at);
