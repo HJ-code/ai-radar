@@ -58,6 +58,7 @@ export interface Hotspot {
   author: string | null;
   hotScore: number;
   rangeName: string | null;
+  keywords: string[];
   aiStatus: AiStatus;
   aiRelevance: number;
   summaryZh: string | null;

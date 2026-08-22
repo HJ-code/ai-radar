@@ -21,7 +21,8 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const getHealth = () => api<Health>('/api/health');
 export const getStats = () => api<Stats>('/api/stats');
-export const getHotspots = (limit = 30) => api<Hotspot[]>(`/api/hotspots?limit=${limit}`);
+export const getHotspots = (limit = 30, before?: string) =>
+  api<Hotspot[]>(`/api/hotspots?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`);
 export const getSources = () => api<Source[]>('/api/sources');
 export const getKeywords = () => api<Keyword[]>('/api/keywords');
 export const getRanges = () => api<Range[]>('/api/ranges');

@@ -99,34 +99,30 @@ body {
     radial-gradient(44% 38% at 22% 90%, rgba(163, 230, 53, 0.08), transparent 60%);
 }
 
-/* 玻璃面板（Aceternity 风）——更透：低不透明 + 高模糊 */
+/* 玻璃面板（Aceternity 风）——更透：低不透明 + 高模糊 + 斜向反光 */
 .glass {
-  background: linear-gradient(
-    165deg,
-    rgba(255, 255, 255, 0.07) 0%,
-    rgba(255, 255, 255, 0.02) 45%,
-    rgba(255, 255, 255, 0.045) 100%
-  );
+  background:
+    linear-gradient(115deg, transparent 26%, rgba(255, 255, 255, 0.06) 40%, rgba(255, 255, 255, 0.015) 48%, transparent 62%),
+    linear-gradient(165deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.02) 45%, rgba(255, 255, 255, 0.045) 100%);
   border: 1px solid rgba(255, 255, 255, 0.10);
   backdrop-filter: blur(24px) saturate(170%);
   -webkit-backdrop-filter: blur(24px) saturate(170%);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15),
+    inset 0 0 26px rgba(255, 255, 255, 0.025),
     0 8px 28px rgba(0, 0, 0, 0.30);
 }
 
 .glass-strong {
-  background: linear-gradient(
-    160deg,
-    rgba(255, 255, 255, 0.09) 0%,
-    rgba(255, 255, 255, 0.02) 48%,
-    rgba(255, 255, 255, 0.06) 100%
-  );
+  background:
+    linear-gradient(115deg, transparent 24%, rgba(255, 255, 255, 0.09) 39%, rgba(255, 255, 255, 0.02) 49%, transparent 64%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.02) 48%, rgba(255, 255, 255, 0.06) 100%);
   border: 1px solid rgba(255, 255, 255, 0.12);
   backdrop-filter: blur(30px) saturate(170%);
   -webkit-backdrop-filter: blur(30px) saturate(170%);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 0 34px rgba(255, 255, 255, 0.03),
     0 12px 40px rgba(0, 0, 0, 0.38);
 }
 
@@ -156,6 +152,11 @@ body {
   font-family: var(--font-mono2);
   letter-spacing: 0.32em;
 }
+
+/* ---------- 可读性：HUD 微字统一放大（保留 9<10<11 原有层级，各 +2px） ---------- */
+.text-\[9px\] { font-size: 11px; }
+.text-\[10px\] { font-size: 12px; }
+.text-\[11px\] { font-size: 13px; }
 
 /* BorderBeam 旋转光束 */
 @keyframes border-beam {

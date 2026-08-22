@@ -32,7 +32,9 @@ export default function HotspotCard({ h, now, onShare, keywords }: Props) {
   const summary = h.summaryZh?.trim();
   const isHot = h.hotScore >= 150;
   const hay = `${h.title ?? ''}\n${h.text ?? ''}\n${h.url ?? ''}`.toLowerCase();
+  // 优先用服务端给出的命中启用关键词；老数据兜底走客户端子串匹配
   const hits = (keywords ?? []).filter((k) => k && hay.includes(k.toLowerCase())).slice(0, 3);
+  const kw = (h.keywords && h.keywords.length ? h.keywords : hits).slice(0, 3);
 
   function stop(e: MouseEvent) {
     e.stopPropagation();
@@ -52,17 +54,17 @@ export default function HotspotCard({ h, now, onShare, keywords }: Props) {
           <span className="ml-auto font-mono2 text-[10px] text-slate-500">{relTime(h.createdAt, now)}</span>
         </div>
 
-        {/* 符合的监控配置点：范围 + 命中关键词 */}
-        {(h.rangeName || hits.length > 0) && (
+        {/* 命中的监控配置点：监控范围 + 追踪关键词 */}
+        {(h.rangeName || kw.length > 0) && (
           <div className="flex flex-wrap gap-1.5">
             {h.rangeName && (
               <span className="font-mono2 text-[9px] text-neon/80 border border-neon/25 bg-neon/5 rounded px-1.5 py-px">
                 范围 · {h.rangeName}
               </span>
             )}
-            {hits.map((k) => (
+            {kw.map((k) => (
               <span key={k} className="font-mono2 text-[9px] text-signal border border-signal/30 bg-signal/5 rounded px-1.5 py-px">
-                命中 · {k}
+                关键词 · {k}
               </span>
             ))}
           </div>

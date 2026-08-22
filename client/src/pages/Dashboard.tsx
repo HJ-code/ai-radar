@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type UIEvent } from 'react';
 import type { Hotspot, Source } from '../types.ts';
 import { getAiSystem, getAlerts, getKeywords, getSources, getStats, setAiEnabled, testAi, testNotify, updateSource } from '../api/client.ts';
 import { usePoll } from '../hooks/usePoll.ts';
@@ -8,20 +8,21 @@ import HotspotCard from '../components/HotspotCard.tsx';
 import Toggle from '../components/Toggle.tsx';
 import { BorderBeam } from '../components/ui/BorderBeam.tsx';
 import { FieldSelect } from '../components/ui/FieldSelect.tsx';
+import { GlareCard } from '../components/ui/GlareCard.tsx';
 import { Reveal } from '../components/ui/Reveal.tsx';
 
 interface Props {
   hotspots: Hotspot[];
   refreshKey: number;
-  feedLimit: number;
-  onFeedLimit: (n: number) => void;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
   onNotice: (msg: string) => void;
 }
 
 const INTERVALS = [5, 10, 15, 30, 60];
-const FEED_SIZES = [30, 50, 80, 120];
 
-export default function Dashboard({ hotspots, refreshKey, feedLimit, onFeedLimit, onNotice }: Props) {
+export default function Dashboard({ hotspots, refreshKey, hasMore, loadingMore, onLoadMore, onNotice }: Props) {
   const statsPoll = usePoll(getStats, 8000, [refreshKey]);
   const sourcesPoll = usePoll(getSources, 8000, [refreshKey]);
   const aiPoll = usePoll(getAiSystem, 30000, [refreshKey]);
@@ -112,6 +113,35 @@ export default function Dashboard({ hotspots, refreshKey, feedLimit, onFeedLimit
     }
   }
 
+  /** 触底加载：xl 面板内部滚动用 onScroll；<xl 页面滚动用哨兵离视口距离判定 */
+  const endRef = useRef<HTMLDivElement>(null);
+  const canLoadRef = useRef(true);
+  useEffect(() => {
+    canLoadRef.current = !loadingMore;
+  }, [loadingMore]);
+
+  const requestLoad = useCallback(() => {
+    if (!canLoadRef.current || !hasMore) return;
+    canLoadRef.current = false;
+    onLoadMore();
+  }, [hasMore, onLoadMore]);
+
+  function handleFeedScroll(e: UIEvent<HTMLDivElement>) {
+    const el = e.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 220) requestLoad();
+  }
+
+  useEffect(() => {
+    function onWinScroll() {
+      const el = endRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      if (r.top <= innerHeight + 220) requestLoad();
+    }
+    window.addEventListener('scroll', onWinScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onWinScroll);
+  }, [requestLoad]);
+
   const statsTiles = [
     { label: '热点', value: stats?.hotspots ?? '·', color: 'text-neon' },
     { label: '原始条目', value: stats?.items ?? '·', color: 'text-cyan' },
@@ -123,7 +153,8 @@ export default function Dashboard({ hotspots, refreshKey, feedLimit, onFeedLimit
     <div className="h-full flex flex-col space-y-5">
       {/* 首屏带：最新热点（信息扩容）+ 紧凑雷达 */}
       <Reveal className="shrink-0">
-        <section className="relative glass-strong rounded-2xl p-5 overflow-hidden">
+        <GlareCard className="rounded-2xl overflow-hidden">
+          <section className="relative glass-strong rounded-2xl p-5 overflow-hidden">
           <BorderBeam size={200} duration={14} anchor={90} />
           <div className="flex flex-wrap items-center gap-6">
             <div className="min-w-0 flex-1">
@@ -164,6 +195,7 @@ export default function Dashboard({ hotspots, refreshKey, feedLimit, onFeedLimit
             </div>
           </div>
         </section>
+        </GlareCard>
       </Reveal>
 
       {/* 主舱：右栏自然高度驱动页面；items-stretch 使左流面板拉满至右栏底边齐平，xl 下列表内部滚动 */}
@@ -185,11 +217,14 @@ export default function Dashboard({ hotspots, refreshKey, feedLimit, onFeedLimit
           <section className="glass rounded-2xl p-5 flex flex-col min-h-0 flex-1">
             <div className="mb-3 flex items-center justify-between shrink-0">
               <h2 className="hud-label text-[11px] text-slate-400">LIVE HOTSPOTS — 实时热点</h2>
-              <FieldSelect value={feedLimit} onChange={onFeedLimit} options={FEED_SIZES} title="每页展示条数" suffix="条" />
+              <span className="font-mono2 text-[11px] text-slate-500">
+                已加载 {hotspots.length}
+                {stats?.hotspots ? ` · 共 ${stats.hotspots}` : ''}
+              </span>
             </div>
             {/* 列表容器 absolute 脱离行高贡献：左栏不撑破栅格（行高由右栏决定），同时面板可拉满至右栏底边 */}
             <div className="relative min-h-0 flex-1">
-              <div className="overflow-y-auto overflow-x-hidden pr-1 xl:absolute xl:inset-0">
+              <div className="overflow-y-auto overflow-x-hidden pr-1 xl:absolute xl:inset-0" onScroll={handleFeedScroll}>
                 <div className="space-y-3">
                 {hotspots.length === 0 ? (
                   <div className="py-16 text-center text-sm text-slate-500">
@@ -204,13 +239,30 @@ export default function Dashboard({ hotspots, refreshKey, feedLimit, onFeedLimit
                   ))
                 )}
                 </div>
+                {hotspots.length > 0 && (
+                  <div ref={endRef} className="pt-2 pb-1">
+                    {loadingMore ? (
+                      <div className="text-center text-xs text-slate-500 py-2">加载中…</div>
+                    ) : hasMore ? (
+                      <button
+                        onClick={onLoadMore}
+                        className="w-full text-center font-mono2 text-[11px] text-neon/80 hover:text-neon py-2 cursor-pointer disabled:opacity-40"
+                      >
+                        加载更多（已显示 {hotspots.length} 条）
+                      </button>
+                    ) : (
+                      <div className="text-center font-mono2 text-[11px] text-slate-600 py-2">已全部加载 {hotspots.length} 条</div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </section>
         </div>
 
-        {/* 右：控制塔（数据源/三道关/通知日志，全内容平铺、无内部滚动条） */}
-        <aside className="flex flex-col gap-4 min-w-0">
+        {/* 右：控制塔（数据源/三道关/通知日志，全内容平铺、无内部滚动条），玻璃反光环绕 */}
+        <GlareCard className="min-w-0 rounded-2xl overflow-hidden">
+          <aside className="flex flex-col gap-4 min-w-0 h-full">
           <section className="glass rounded-2xl p-4 shrink-0">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="hud-label text-[11px] text-slate-400">DATA SOURCES — 数据源</h2>
@@ -319,7 +371,8 @@ export default function Dashboard({ hotspots, refreshKey, feedLimit, onFeedLimit
               )}
             </ul>
           </div>
-        </aside>
+          </aside>
+        </GlareCard>
       </div>
     </div>
   );
