@@ -22,7 +22,7 @@
 - **后端**：Node.js 24 · Express 5 · TypeScript（tsx 直跑，无编译步骤）· SQLite（Node 内置 `node:sqlite`，零原生依赖）
 - **前端**：React 19 · Vite 8 · TypeScript · Tailwind CSS v4
 - **AI 接入**：任意 OpenAI 兼容 `chat/completions` 服务（可插拔 `intelligence` 客户端）
-- **数据源**：Hacker News · Reddit · GitHub · arXiv · 量子位/机器之心 RSS · Google News · Hugging Face（全部免费）
+- **数据源**：Hacker News · GitHub（高星新仓库，≥500 星）· Bilibili（科技分区榜）· 中文 RSS（量子位/机器之心/IT之家/极客公园/雷锋网/InfoQ中文/开源中国）· Reddit/Google News/Hugging Face（可选接入）（全部免费）
 
 ## 目录结构
 
@@ -110,18 +110,21 @@ AI_COOLDOWN_MS=60000      # 两轮 AI 处理间的冷却
 
 ## 核心机制
 
-- **采集调度**：进程内每 20s 检查各源是否到期，按源独立间隔轮询；单源失败自动隔离，不影响整体。
+- **采集调度**：进程内每 20s 检查各源是否到期，按源独立间隔轮询；单源失败自动隔离，不影响整体。RSS/B站为**整库型源**，每轮只抓取一次（避免按关键词重复请求）。
+- **关键词预过滤**：入库前条目标题/正文/URL 需命中任一启用关键词/范围词，否则丢弃（过滤计数返回 `/api/collect/now`）。
 - **去重**：`items(source_key, external_id)` 唯一键；热点按 `url` 唯一。
-- **AI 三道关**：每条新条目一次请求返回 `verdict(real/doubtful/fake) + relevance(0-100) + 中文摘要`。`fake` 隐藏；`doubtful` 降权（hotScore 减半）；`real` 且相关度达标 → 生成热点，`hotScore = 相关度 × log10(互动量+10)`。连续失败自动熔断并回落规则打分，不中断功能。
+- **AI 三道关**：每条新条目一次请求返回 `verdict(real/doubtful/fake) + relevance(0-100) + 中文摘要`。`fake` 隐藏；`doubtful` 降权（hotScore 减半）；相关度**仅主体相关给高分**（仅提及封顶 50）；判定倾向可信为真。`real` 且相关度达标、且**互动量达该源门槛** → 生成热点，`hotScore = 相关度 × log10(互动量+10)`。连续失败自动熔断并回落规则打分，不中断功能。
+- **热点互动门槛**：交互型源需达标才入热点（HN points≥50 / GitHub stars≥500 / B站 view≥1万 或 like≥200），`extraJson` 见 `min<字段>` 可调；资讯型源（RSS）以相关度准入并在卡片标注「资讯」。
 - **通知触发**：AI 判 `real` 且相关度达标且命中启用关键词、且仅对「本轮新插入的热点」通知（不回放存量刷屏）、`items.notified` 去重。通知渠道可插拔（当前：站内 `alert_logs` + SSE → 浏览器 Notification）。
 - **浏览器通知**：需 **localhost 或 HTTPS** 上下文；打开页面后点顶栏铃铛授权。
 
 ## 已知限制
 
 - Reddit / Google News / Hugging Face 在部分网络不可达（疑似需要代理）；采集器已就绪，失败自动降级，可换源或挂代理后直接可用。
-- GitHub 未带 Token 时每分钟限 10 次查询（已内置 6.5s 节流）；可在源配置填 `apiKey` 提升额度。
+- GitHub 未带 Token 时每分钟限 10 次查询（已内置 6.5s 节流）；可在源配置填 `apiKey` 提升额度。采集默认只收近 7 天 `stars>500` 的新仓库，弱数据源已从源头过滤。
+- B 站科技分区榜 API 要求浏览器 User-Agent（否则 -352 风控），高频请求会临时限流；正常轮询频率下可用。
 - 免费 AI 端点（如 opencode.ai 的 `mimo-v2.5`）单次调用较慢（15–45s），可调小 `AI_MAX_PER_RUN` 或换更快的模型（如 `deepseek-v4-flash`）。
-- 模型对训练截止日期之后的事件偏保守，可能把近期新闻判为 `存疑`；可在 `server/src/ai/prompts.ts` 调整判定倾向。
+- 模型对训练截止日期之后的事件偏保守，可能把近期新闻判为 `存疑`；已放宽为「可信即 real」倾向，仍可在 `server/src/ai/prompts.ts` 再调整。
 
 ## 文档
 
