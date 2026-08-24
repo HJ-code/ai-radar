@@ -4,9 +4,10 @@ import { fetchText } from '../util/fetch.ts';
 import { getExtra } from '../util/helpers.ts';
 import { parseFeedXml } from '../util/rss.ts';
 
-/** 通用 RSS 聚合源：从 extraJson.feeds 抓取多个 feed */
+/** 通用 RSS 聚合源：从 extraJson.feeds 抓取多个 feed，整库型（一次拉全部） */
 export const rssCollector: Collector = {
   sourceKey: 'rss',
+  wholeList: true,
 
   async search(query, src: SourceRow) {
     const feeds = (getExtra(src).feeds as string[] | undefined) ?? [];

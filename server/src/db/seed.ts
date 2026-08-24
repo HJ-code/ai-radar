@@ -1,13 +1,29 @@
 import { db, nowIso } from './conn.ts';
 
+/** 国内官方媒体 Feed（实测可达；新库默认全量，老库由 ensureRuntimeSources 幂等补缺） */
+const DOMESTIC_FEEDS = [
+  'https://www.qbitai.com/feed',
+  'https://www.jiqizhixin.com/rss',
+  'https://www.ithome.com/rss/',
+  'https://www.geekpark.net/rss',
+  'https://www.leiphone.com/feed',
+  'https://www.infoq.cn/feed',
+  'https://www.oschina.net/news/rss',
+];
+
 const defaultSources = [
   { sourceKey: 'hackernews', displayName: 'Hacker News', intervalMinutes: 15, extraJson: '{}' },
   { sourceKey: 'reddit', displayName: 'Reddit', intervalMinutes: 15, extraJson: '{}' },
-  { sourceKey: 'github', displayName: 'GitHub 趋势', intervalMinutes: 60, extraJson: '{"limit":10,"throttleMs":6500}' },
-  { sourceKey: 'arxiv', displayName: 'arXiv AI 论文', intervalMinutes: 60, extraJson: '{}' },
-  { sourceKey: 'rss', displayName: '中文 AI 资讯 RSS', intervalMinutes: 30, extraJson: '{"feeds":["https://www.qbitai.com/feed","https://www.jiqizhixin.com/rss"]}' },
+  { sourceKey: 'github', displayName: 'GitHub 高星新仓库', intervalMinutes: 60, extraJson: '{"limit":10,"throttleMs":6500,"minStars":500}' },
+  {
+    sourceKey: 'rss',
+    displayName: '中文 AI 资讯 RSS',
+    intervalMinutes: 30,
+    extraJson: JSON.stringify({ feeds: DOMESTIC_FEEDS }),
+  },
   { sourceKey: 'googlenews', displayName: 'Google News', intervalMinutes: 30, extraJson: '{}' },
   { sourceKey: 'huggingface', displayName: 'Hugging Face 模型热榜', intervalMinutes: 60, extraJson: '{}' },
+  { sourceKey: 'bilibili', displayName: 'B站 科技/AI 视频', intervalMinutes: 60, extraJson: '{"rid":188,"limit":20}' },
 ];
 
 const defaultRanges = [
@@ -43,6 +59,7 @@ export function seed(): void {
       ins.run({ sk: s.sourceKey, dn: s.displayName, iv: s.intervalMinutes, ej: s.extraJson });
     }
   }
+  ensureRuntimeSources();
 
   if (count('ranges') === 0) {
     const ins = db.prepare(
@@ -60,5 +77,43 @@ export function seed(): void {
     for (const k of defaultKeywords) {
       ins.run({ k: k.keyword, n: k.note, c: nowIso() });
     }
+  }
+}
+
+/**
+ * 老库幂等补缺：只加官方源与 B站，不覆盖用户已自定义的 feed 与启用状态。
+ * - rss 源：把 DOMESTIC_FEEDS 里缺失的 feed 追加进去（保留用户自加的 feed）；
+ * - bilibili：源不存在才插入（默认启用）。
+ */
+export function ensureRuntimeSources(): void {
+  const rssRow = db.prepare(`SELECT id, extra_json FROM sources WHERE source_key = 'rss' ORDER BY id LIMIT 1`).get() as
+    | { id: number; extra_json: string }
+    | undefined;
+  if (rssRow) {
+    let extra: { feeds?: unknown } = {};
+    try {
+      const parsed = JSON.parse(rssRow.extra_json || '{}');
+      if (parsed && typeof parsed === 'object') extra = parsed as { feeds?: unknown };
+    } catch {
+      /* 忽略损坏的 extraJson，保留原值 */
+    }
+    const feeds = Array.isArray(extra.feeds) ? (extra.feeds as string[]) : [];
+    const merged = [...feeds];
+    for (const f of DOMESTIC_FEEDS) {
+      if (!merged.includes(f)) merged.push(f);
+    }
+    const next = JSON.stringify({ ...extra, feeds: merged });
+    if (next !== rssRow.extra_json) {
+      db.prepare('UPDATE sources SET extra_json = ? WHERE id = ?').run(next, rssRow.id);
+      console.log('[seed] rss 源已补缺国内官方 feeds');
+    }
+  }
+
+  const hasBili = db.prepare(`SELECT id FROM sources WHERE source_key = 'bilibili' LIMIT 1`).get();
+  if (!hasBili) {
+    db.prepare(
+      "INSERT INTO sources (source_key, display_name, enabled, interval_minutes, last_run_at, extra_json) VALUES ('bilibili', 'B站 科技/AI 视频', 1, 60, NULL, '{\"rid\":188,\"limit\":20}')",
+    ).run();
+    console.log('[seed] 已新增 B站 数据源');
   }
 }

@@ -14,6 +14,7 @@ const MAX_QUERIES = 30;
 
 export interface RunResult {
   added: number;
+  filtered: number;
   scanned: number;
   aiProcessed: number;
   errors: string[];
@@ -27,6 +28,22 @@ function buildQueries(): string[] {
   }
   for (const k of listEnabledKeywords()) qs.add(k.keyword.trim());
   return [...qs].filter(Boolean).slice(0, MAX_QUERIES);
+}
+
+/** 全部启用关键词/范围词（预过滤用，不受 MAX_QUERIES 上限影响） */
+function buildScopeTerms(): string[] {
+  const terms = new Set<string>();
+  for (const r of listEnabledRanges()) {
+    for (const term of r.queriesCsv.split(',').map((t) => t.trim()).filter(Boolean)) terms.add(term);
+  }
+  for (const k of listEnabledKeywords()) terms.add(k.keyword.trim());
+  return [...terms].filter(Boolean);
+}
+
+/** 采集层预过滤：标题/正文/URL 命中任一启用关键词/范围词才进库，从源头卡掉无关噪音 */
+function hitsScope(it: ItemDto, terms: string[]): boolean {
+  const hay = `${it.title ?? ''}\n${it.text ?? ''}\n${it.url ?? ''}`.toLowerCase();
+  return terms.some((t) => t && hay.includes(t.toLowerCase()));
 }
 
 function isDue(src: SourceRow): boolean {
@@ -65,7 +82,8 @@ export async function runOnce(opts: { force?: boolean } = {}): Promise<RunResult
   const force = opts.force ?? false;
   const sources = listEnabledSources();
   const queries = buildQueries();
-  const result: RunResult = { added: 0, scanned: 0, aiProcessed: 0, errors: [], ranAt: nowIso() };
+  const scopeTerms = buildScopeTerms();
+  const result: RunResult = { added: 0, filtered: 0, scanned: 0, aiProcessed: 0, errors: [], ranAt: nowIso() };
 
   for (const src of sources) {
     const collector = getCollector(src.sourceKey) as Collector | undefined;
@@ -80,12 +98,20 @@ export async function runOnce(opts: { force?: boolean } = {}): Promise<RunResult
     try {
       let sourceAdded = 0;
       for (const q of queries) {
+        // 整库型源与具体关键词无关，用空 query 入库，避免给所有条目误标范围
+        const queryLabel = collector.wholeList ? '' : q;
         const items = await collector.search(q, src);
         for (const it of items) {
-          const { inserted } = insertItem(toNewItem(src, q, it));
+          if (!hitsScope(it, scopeTerms)) {
+            result.filtered += 1;
+            continue;
+          }
+          const { inserted } = insertItem(toNewItem(src, queryLabel, it));
           if (inserted) sourceAdded += 1;
         }
         if (throttleMs > 0) await sleep(throttleMs);
+        // 整库型源（RSS/B站等）一次 search 已拉全量，无需按每个关键词重复请求
+        if (collector.wholeList) break;
       }
       updateLastRun(src.id, nowIso());
       result.added += sourceAdded;

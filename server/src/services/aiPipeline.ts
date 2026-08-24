@@ -4,7 +4,9 @@ import type { ItemRow } from '../repositories/types.ts';
 import { insertHotspotIfAbsent } from '../repositories/hotspots.ts';
 import { listEnabledKeywords, markKeywordTriggered } from '../repositories/keywords.ts';
 import { listEnabledRanges } from '../repositories/ranges.ts';
+import { listSources } from '../repositories/sources.ts';
 import { getSetting, setSetting } from '../repositories/settings.ts';
+import { getExtra } from '../util/helpers.ts';
 import { AiClient, AiError } from '../ai/client.ts';
 import { buildAnalysisMessages, type ScopeCtx } from '../ai/prompts.ts';
 import type { AiAnalysis, AiVerdict, AnalysisItemCtx } from '../ai/types.ts';
@@ -131,6 +133,41 @@ export function engagementMagnitude(engagementJson: string): number {
   return max;
 }
 
+/** 各交互型源的互动准入门槛；数值可被源 extraJson 的 min<字段> 覆盖。RSS 等资讯型源不在此表内 → 豁免。 */
+const ENGAGEMENT_GATES: Record<string, { field: string; min: number; or?: { field: string; min: number } }> = {
+  hackernews: { field: 'points', min: 50 },
+  github: { field: 'stars', min: 500 },
+  bilibili: { field: 'view', min: 10_000, or: { field: 'like', min: 200 } },
+  reddit: { field: 'score', min: 50 },
+  huggingface: { field: 'downloads', min: 1_000 },
+};
+
+function engagementValue(item: ItemRow, field: string): number {
+  try {
+    const o = JSON.parse(item.engagementJson || '{}') as Record<string, unknown>;
+    const v = o[field];
+    return typeof v === 'number' && Number.isFinite(v) ? v : Number.NaN;
+  } catch {
+    return Number.NaN;
+  }
+}
+
+/** 互动门槛：不达标的内容不视为「热点」（主字段不达标时可用 or 字段兜底）；无门槛来源放行 */
+export function passesEngagementGate(item: ItemRow, extra: Record<string, unknown>): boolean {
+  const gate = ENGAGEMENT_GATES[item.sourceKey];
+  if (!gate) return true;
+  const cap = (f: string) => `min${f[0].toUpperCase()}${f.slice(1)}`;
+  const min = Number(extra[cap(gate.field)] ?? gate.min);
+  const v = engagementValue(item, gate.field);
+  if (!Number.isNaN(v) && v >= min) return true;
+  if (gate.or) {
+    const orMin = Number(extra[cap(gate.or.field)] ?? gate.or.min);
+    const ov = engagementValue(item, gate.or.field);
+    if (!Number.isNaN(ov) && ov >= orMin) return true;
+  }
+  return false;
+}
+
 /** 规则级相关度 0-100（AI 不可用时的降级） */
 export function ruleRelevance(item: ItemRow, scope: ScopeCtx): number {
   const title = (item.title ?? '').toLowerCase();
@@ -221,10 +258,10 @@ async function maybeNotify(item: ItemRow, hotspotId: number, a: AiAnalysis): Pro
   markItemNotified(item.id);
 }
 
-/** AI 三道关结果落地：更新条目 + 相关且非虚假 → 写热点（存疑降权、虚假隐藏）；real 且新热点 → 告警 */
-async function applyAi(item: ItemRow, a: AiAnalysis): Promise<void> {
+/** AI 三道关结果落地：更新条目 + 相关且非虚假且互动达标 → 写热点（存疑降权、虚假隐藏）；real 且新热点 → 告警 */
+async function applyAi(item: ItemRow, a: AiAnalysis, gatePass: boolean): Promise<void> {
   updateItemAi(item.id, { aiStatus: a.verdict, aiRelevance: a.relevance, summaryZh: a.summary || null });
-  if (a.verdict === 'fake' || a.relevance < config.ai.minRelevance) return;
+  if (a.verdict === 'fake' || a.relevance < config.ai.minRelevance || !gatePass) return;
   const hs = persistHotspot(item, a.verdict, a.relevance, a.summary || null, a.verdict);
   if (!hs) return;
   if (hs.inserted && a.verdict === 'real' && !item.notified) {
@@ -232,11 +269,11 @@ async function applyAi(item: ItemRow, a: AiAnalysis): Promise<void> {
   }
 }
 
-/** AI 不可用时的规则降级：仍打「未鉴定」标记并入库热点，功能不中断 */
-function applyRules(item: ItemRow, scope: ScopeCtx): void {
+/** AI 不可用时的规则降级：仍打「未鉴定」标记并入库热点（互动达标才入），功能不中断 */
+function applyRules(item: ItemRow, scope: ScopeCtx, gatePass: boolean): void {
   const relevance = ruleRelevance(item, scope);
   updateItemAi(item.id, { aiStatus: 'unscored', aiRelevance: relevance, summaryZh: null });
-  if (relevance < config.ai.minRelevance) return;
+  if (relevance < config.ai.minRelevance || !gatePass) return;
   persistHotspot(item, 'unscored', relevance, null);
 }
 
@@ -258,9 +295,11 @@ export async function processPendingItems(): Promise<AiRunReport> {
   if (!items.length) return { processed: 0, mode: 'none' };
 
   const scope = buildScope();
+  const srcExtra = new Map(listSources().map((s) => [s.sourceKey, getExtra(s)]));
+  const gatePass = (item: ItemRow) => passesEngagementGate(item, srcExtra.get(item.sourceKey) ?? {});
   const c = getClient();
   if (!c) {
-    for (const item of items) applyRules(item, scope);
+    for (const item of items) applyRules(item, scope, gatePass(item));
     return { processed: items.length, mode: 'rules' };
   }
 
@@ -276,7 +315,7 @@ export async function processPendingItems(): Promise<AiRunReport> {
         failStreak = 0;
         aiOk = true;
         mode = 'ai';
-        await applyAi(item, analysis);
+        await applyAi(item, analysis, gatePass(item));
         processed += 1;
         continue;
       } catch (err) {
@@ -285,7 +324,7 @@ export async function processPendingItems(): Promise<AiRunReport> {
         aiOk = false; // AI 模式下首次失败：本条回落规则，后续同批也走规则
       }
     }
-    applyRules(item, scope);
+    applyRules(item, scope, gatePass(item));
     processed += 1;
   }
 
