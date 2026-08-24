@@ -103,8 +103,8 @@ export default function App() {
     useCallback((a) => {
       setUnread((c) => c + 1);
       showBrowserNotification(a.keyword, { body: a.summaryZh || a.title, url: a.url });
-      setNotice(`${a.keyword} 命中：${a.title}`);
-    }, []),
+      pushNotice(`${a.keyword} 命中：${a.title}`);
+    }, [pushNotice]),
   );
 
   function handleBell() {

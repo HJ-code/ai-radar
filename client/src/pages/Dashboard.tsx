@@ -11,6 +11,99 @@ import { FieldSelect } from '../components/ui/FieldSelect.tsx';
 import { GlareCard } from '../components/ui/GlareCard.tsx';
 import { Reveal } from '../components/ui/Reveal.tsx';
 
+function parseExtra(json: string): Record<string, unknown> {
+  try {
+    const o = JSON.parse(json || '{}') as unknown;
+    return o && typeof o === 'object' ? (o as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** 数据源行内配置编辑器：rss 编辑 feed 列表，github 调最低 Stars，bilibili 调分区 */
+function SourceConfigEditor({ s, onSaved, onNotice }: { s: Source; onSaved: () => void; onNotice: (m: string) => void }) {
+  const [initial] = useState(() => parseExtra(s.extraJson) as { feeds?: unknown[]; minStars?: number; rid?: number; limit?: number });
+  const [feedsText, setFeedsText] = useState(() => (Array.isArray(initial.feeds) ? (initial.feeds as unknown[]).join('\n') : ''));
+  const [minStars, setMinStars] = useState(() => (initial.minStars != null ? String(initial.minStars) : ''));
+  const [rid, setRid] = useState(() => (initial.rid != null ? String(initial.rid) : ''));
+  const [limit, setLimit] = useState(() => (initial.limit != null ? String(initial.limit) : ''));
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    setBusy(true);
+    try {
+      const extra = parseExtra(s.extraJson);
+      if (s.sourceKey === 'rss') {
+        extra.feeds = feedsText.split('\n').map((f) => f.trim()).filter(Boolean);
+      } else if (s.sourceKey === 'github') {
+        if (minStars.trim() !== '') extra.minStars = Number(minStars);
+        if (limit.trim() !== '') extra.limit = Number(limit);
+      } else if (s.sourceKey === 'bilibili') {
+        if (rid.trim() !== '') extra.rid = Number(rid);
+        if (limit.trim() !== '') extra.limit = Number(limit);
+      }
+      await updateSource(s.id, { extraJson: JSON.stringify(extra) });
+      onNotice(`${s.displayName} 配置已保存`);
+      onSaved();
+    } catch (e) {
+      onNotice(`保存失败：${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="glass rounded-lg p-3 mt-1 space-y-2">
+      {s.sourceKey === 'rss' && (
+        <>
+          <div className="font-mono2 text-[10px] text-slate-400">RSS feed 列表（一行一个）</div>
+          <textarea
+            value={feedsText}
+            onChange={(e) => setFeedsText(e.target.value)}
+            rows={Math.max(3, Math.min(7, feedsText.split('\n').length + 1))}
+            className="w-full bg-abyss/60 border border-slate-700 rounded-md px-2 py-1.5 text-[11px] text-slate-200 font-mono2 focus:outline-none focus:border-neon/50 resize-y"
+          />
+        </>
+      )}
+      {s.sourceKey === 'github' && (
+        <div className="flex gap-3 text-[11px]">
+          <label className="flex items-center gap-1.5 text-slate-400">
+            最低 Stars
+            <input value={minStars} onChange={(e) => setMinStars(e.target.value.replace(/\D/g, ''))} placeholder="500" className="w-20 bg-abyss/60 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono2 focus:outline-none focus:border-neon/50" />
+          </label>
+          <label className="flex items-center gap-1.5 text-slate-400">
+            条数
+            <input value={limit} onChange={(e) => setLimit(e.target.value.replace(/\D/g, ''))} placeholder="10" className="w-16 bg-abyss/60 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono2 focus:outline-none focus:border-neon/50" />
+          </label>
+        </div>
+      )}
+      {s.sourceKey === 'bilibili' && (
+        <div className="flex gap-3 text-[11px]">
+          <label className="flex items-center gap-1.5 text-slate-400">
+            分区 rid
+            <input value={rid} onChange={(e) => setRid(e.target.value.replace(/\D/g, ''))} placeholder="188" className="w-20 bg-abyss/60 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono2 focus:outline-none focus:border-neon/50" />
+          </label>
+          <label className="flex items-center gap-1.5 text-slate-400">
+            条数
+            <input value={limit} onChange={(e) => setLimit(e.target.value.replace(/\D/g, ''))} placeholder="20" className="w-16 bg-abyss/60 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono2 focus:outline-none focus:border-neon/50" />
+          </label>
+        </div>
+      )}
+      {!['rss', 'github', 'bilibili'].includes(s.sourceKey) && (
+        <div className="text-[10px] text-slate-500">该源暂无可编辑配置（可调开关与间隔）</div>
+      )}
+      <div className="flex items-center gap-2">
+        <button onClick={save} disabled={busy} className="px-3 py-1 rounded-md glass text-neon text-[11px] tracking-wider hover:border-neon/40 disabled:opacity-40 cursor-pointer transition-colors">
+          {busy ? '保存中…' : '保存'}
+        </button>
+        <button onClick={onSaved} className="px-3 py-1 rounded-md text-slate-400 text-[11px] hover:text-slate-200 cursor-pointer transition-colors">
+          取消
+        </button>
+      </div>
+    </div>
+  );
+}
+
 interface Props {
   hotspots: Hotspot[];
   refreshKey: number;
@@ -31,6 +124,7 @@ export default function Dashboard({ hotspots, refreshKey, hasMore, loadingMore, 
   const [aiBusy, setAiBusy] = useState(false);
   const [aiResult, setAiResult] = useState<string | null>(null);
   const [notifyBusy, setNotifyBusy] = useState(false);
+  const [configuredSrc, setConfiguredSrc] = useState<number | null>(null);
 
   const stats = statsPoll.data;
   const sources = sourcesPoll.data ?? [];
@@ -275,22 +369,45 @@ export default function Dashboard({ hotspots, refreshKey, hasMore, loadingMore, 
                 <div className="text-sm text-slate-500 py-4 text-center">加载数据源中……</div>
               ) : (
                 sources.map((s) => (
-                  <div key={s.id} className="glass rounded-lg px-3 py-1.5 flex items-center gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm text-slate-200 truncate">{s.displayName}</div>
-                      <div className="font-mono2 text-[10px] text-slate-500 truncate">
-                        {s.sourceKey} · {s.lastRunAt ? `上次 ${relTime(s.lastRunAt)}` : '未运行'}
+                  <div key={s.id} className="space-y-1">
+                    <div className="glass rounded-lg px-3 py-1.5 flex items-center gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm text-slate-200 truncate">{s.displayName}</div>
+                        <div className="font-mono2 text-[10px] text-slate-500 truncate">
+                          {s.sourceKey} · {s.lastRunAt ? `上次 ${relTime(s.lastRunAt)}` : '未运行'}
+                        </div>
                       </div>
+                      <button
+                        onClick={() => setConfiguredSrc(configuredSrc === s.id ? null : s.id)}
+                        className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border transition-colors cursor-pointer ${
+                          configuredSrc === s.id
+                            ? 'border-neon/50 text-neon'
+                            : 'border-slate-600/60 text-slate-400 hover:text-slate-200 hover:border-slate-400'
+                        }`}
+                        title="编辑源配置"
+                      >
+                        配置
+                      </button>
+                      <FieldSelect
+                        value={s.intervalMinutes}
+                        onChange={(n) => setInterval(s, n)}
+                        options={INTERVALS}
+                        title="轮询间隔（分钟）"
+                        suffix="m"
+                        className="shrink-0"
+                      />
+                      <Toggle on={s.enabled} onChange={(v) => setEnabled(s, v)} />
                     </div>
-                    <FieldSelect
-                      value={s.intervalMinutes}
-                      onChange={(n) => setInterval(s, n)}
-                      options={INTERVALS}
-                      title="轮询间隔（分钟）"
-                      suffix="m"
-                      className="shrink-0"
-                    />
-                    <Toggle on={s.enabled} onChange={(v) => setEnabled(s, v)} />
+                    {configuredSrc === s.id && (
+                      <SourceConfigEditor
+                        s={s}
+                        onSaved={() => {
+                          setConfiguredSrc(null);
+                          sourcesPoll.reload();
+                        }}
+                        onNotice={onNotice}
+                      />
+                    )}
                   </div>
                 ))
               )}

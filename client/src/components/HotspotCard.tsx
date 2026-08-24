@@ -30,7 +30,9 @@ function ExternalIcon() {
 
 export default function HotspotCard({ h, now, onShare, keywords }: Props) {
   const summary = h.summaryZh?.trim();
-  const isHot = h.hotScore >= 150;
+  // RSS 等资讯型源结构性无互动量，不做“热度”伪装
+  const newsType = h.sourceKey === 'rss';
+  const isHot = h.hotScore >= 150 && !newsType;
   const hay = `${h.title ?? ''}\n${h.text ?? ''}\n${h.url ?? ''}`.toLowerCase();
   // 优先用服务端给出的命中启用关键词；老数据兜底走客户端子串匹配
   const hits = (keywords ?? []).filter((k) => k && hay.includes(k.toLowerCase())).slice(0, 3);
@@ -46,6 +48,11 @@ export default function HotspotCard({ h, now, onShare, keywords }: Props) {
         <div className="flex items-center gap-2">
           <AiBadge status={h.aiStatus} />
           <span className="hud-label text-[9px] text-slate-500">{h.sourceKey}</span>
+          {newsType && (
+            <span className="font-mono2 text-[9px] text-slate-400 border border-slate-500/30 bg-slate-500/10 rounded px-1 py-px">
+              资讯
+            </span>
+          )}
           {isHot && (
             <span className="font-mono2 text-[9px] text-warn border border-warn/40 rounded px-1 py-px bg-warn/10 animate-pulse">
               HOT 【{h.hotScore}】

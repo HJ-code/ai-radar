@@ -45,8 +45,10 @@ export const testAi = () =>
 export const collectNow = () => api<CollectResult>('/api/collect/now', { method: 'POST' });
 
 export const toggleSource = (id: number) => api<Source>(`/api/sources/${id}/toggle`, { method: 'POST' });
-export const updateSource = (id: number, body: Partial<Pick<Source, 'enabled' | 'intervalMinutes'>>) =>
-  api<Source>(`/api/sources/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+export const updateSource = (
+  id: number,
+  body: Partial<Pick<Source, 'enabled' | 'intervalMinutes' | 'extraJson' | 'displayName' | 'apiKey'>>,
+) => api<Source>(`/api/sources/${id}`, { method: 'PUT', body: JSON.stringify(body) });
 
 export const addKeyword = (keyword: string, note: string) =>
   api<Keyword>('/api/keywords', { method: 'POST', body: JSON.stringify({ keyword, note }) });
