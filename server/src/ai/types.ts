@@ -7,8 +7,10 @@ export interface AiAnalysis {
   relevance: number;
   /** ≤60 字中文摘要 */
   summary: string;
-  /** 简短判定理由 */
+  /** 简短判定理由（≤30 字）：real 简述来源/依据、doubtful 说明缺什么证据 */
   reasons: string;
+  /** 简短相关度理由（≤30 字）：为何与监控关键词/范围相关；无关时说明「主体无关」 */
+  relevanceReason: string;
 }
 
 /** 送入 AI 的条目上下文（与 ItemRow 解耦，便于构造样本） */

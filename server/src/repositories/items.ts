@@ -38,12 +38,13 @@ export function mapItem(r: Record<string, unknown>): ItemRow {
   };
 }
 
-/** 按 (source_key, external_id) 去重插入，返回是否为新条目 */
+/** 按 (source_key, external_id) 去重插入，返回是否为新条目。入库即置 pending（待处理），
+ *  AI/规则评分后才离开该状态（real/doubtful/fake；规则降级写 unscored 表示"已处理但未 AI 鉴定"）。 */
 export function insertItem(item: NewItem): { inserted: boolean; id: number } {
   const stmt = db.prepare(
     `INSERT OR IGNORE INTO items
-      (source_key, external_id, title, text, url, author, author_url, published_at, collected_at, query, engagement_json, raw_json)
-     VALUES (:sk, :eid, :t, :tx, :u, :a, :au, :pa, :ca, :q, :ej, :rj)`,
+      (source_key, external_id, title, text, url, author, author_url, published_at, collected_at, query, engagement_json, raw_json, ai_status)
+     VALUES (:sk, :eid, :t, :tx, :u, :a, :au, :pa, :ca, :q, :ej, :rj, 'pending')`,
   );
   const info = stmt.run({
     sk: item.sourceKey,
@@ -89,12 +90,17 @@ export function getItem(id: number): ItemRow | null {
   return r ? mapItem(r) : null;
 }
 
-/** 待 AI/规则鉴定的未处理条目，最新优先 */
+/** 真正的"待处理"队列：入库时置 pending，评分（含规则降级）后离开该状态 */
 export function listUnscored(limit: number): ItemRow[] {
   const rows = db
-    .prepare(`SELECT * FROM items WHERE ai_status = 'unscored' ORDER BY COALESCE(published_at, collected_at) DESC LIMIT ?`)
+    .prepare(`SELECT * FROM items WHERE ai_status = 'pending' ORDER BY COALESCE(published_at, collected_at) DESC LIMIT ?`)
     .all(limit);
   return rows.map((r) => mapItem(r as Record<string, unknown>));
+}
+
+/** 待处理队列长度 */
+export function countUnscored(): number {
+  return (db.prepare(`SELECT count(*) AS c FROM items WHERE ai_status = 'pending'`).get() as { c: number }).c;
 }
 
 /** 写入 AI 三道关结果 */

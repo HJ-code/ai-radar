@@ -73,6 +73,9 @@ CREATE TABLE IF NOT EXISTS hotspots (
   author TEXT,
   hot_score INTEGER NOT NULL DEFAULT 0,
   range_name TEXT,
+  engagement_magnitude INTEGER NOT NULL DEFAULT 0,
+  engagement_json TEXT NOT NULL DEFAULT '{}',
+  ai_reasons TEXT,
   ai_status TEXT NOT NULL DEFAULT 'unscored',
   ai_relevance INTEGER NOT NULL DEFAULT 0,
   summary_zh TEXT,
@@ -98,10 +101,29 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE INDEX IF NOT EXISTS idx_items_published  ON items(published_at);
 CREATE INDEX IF NOT EXISTS idx_items_query      ON items(query);
 CREATE INDEX IF NOT EXISTS idx_hotspots_published ON hotspots(published_at);
+CREATE INDEX IF NOT EXISTS idx_hotspots_engagement ON hotspots(engagement_magnitude);
 CREATE INDEX IF NOT EXISTS idx_alert_trigered   ON alert_logs(triggered_at);
 `;
 
+/** 幂等迁移：为旧库的 hotspots 补 detail 列（engagement_magnitude 互动量反规范化 / engagement_json 互动细分反规范化 / ai_reasons AI 判定+相关度理由）。
+ *  必须在执行 schema（含其索引）之前调用。 */
+function migrateHotspotDetailColumns(): void {
+  const cols = db.prepare(`PRAGMA table_info(hotspots)`).all() as { name: string }[];
+  const has = (n: string) => cols.some((c) => c.name === n);
+  if (!has('engagement_magnitude')) {
+    db.exec('ALTER TABLE hotspots ADD COLUMN engagement_magnitude INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!has('engagement_json')) {
+    db.exec(`ALTER TABLE hotspots ADD COLUMN engagement_json TEXT NOT NULL DEFAULT '{}'`);
+  }
+  if (!has('ai_reasons')) {
+    db.exec('ALTER TABLE hotspots ADD COLUMN ai_reasons TEXT');
+  }
+}
+
 export function migrate(): void {
+  // 先补列再跑建表/建索引（schema 中的 idx_hotspots_engagement 依赖该列）
+  migrateHotspotDetailColumns();
   db.exec(schema);
 }
 

@@ -1,7 +1,7 @@
 import { motion } from 'framer-motion';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { collectNow, getAiSystem, getAlerts, getHealth, getHotspots, testNotify } from './api/client.ts';
-import type { Hotspot } from './types.ts';
+import { collectNow, getAiSystem, getAlerts, getHealth, getHotspots, getRanges, getSources, testNotify } from './api/client.ts';
+import type { Hotspot, HotspotView } from './types.ts';
 import { usePoll } from './hooks/usePoll.ts';
 import { useStream } from './hooks/useStream.ts';
 import { getNotificationPermission, requestNotificationPermission, showBrowserNotification } from './util/notify.ts';
@@ -30,35 +30,86 @@ export default function App() {
   const [permission, setPermission] = useState(() => getNotificationPermission());
   const [bellOpen, setBellOpen] = useState(false);
   const [notifyBusy, setNotifyBusy] = useState(false);
-  /** 热点流：首屏一页 + 触底加载更多累计；每页固定 30 条 */
+  /** 热点流：首屏一页 + 触底加载更多累计；每页固定 30 条。视图(排序/筛选)变更时重置 */
   const FEED_PAGE = 30;
   const [feed, setFeed] = useState<Hotspot[]>([]);
+  const [feedTotal, setFeedTotal] = useState<number | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const feedCursor = useRef<string | null>(null);
+  const feedBusy = useRef(false);
   const feedInited = useRef(false);
   const noticeTimer = useRef<number | undefined>(undefined);
+
+  const [view, setView] = useState<HotspotView>({
+    sort: 'smart',
+    order: 'desc',
+    sources: [],
+    range: null,
+    statuses: [],
+    windowMin: null,
+    type: null,
+    relevanceMin: null,
+    scoreMin: null,
+    q: '',
+  });
 
   const healthPoll = usePoll(getHealth, 30000);
   const aiPoll = usePoll(getAiSystem, 30000);
   const alertsPoll = usePoll(() => getAlerts(10), 15000, []);
+  const sourcesPoll = usePoll(getSources, 8000, []);
+  const rangesPoll = usePoll(getRanges, 30000, []);
+  const sources = sourcesPoll.data ?? [];
+  const ranges = rangesPoll.data ?? [];
 
-  /** 每 8s 拉首屏：新热点前插、已有条目就地刷新，保留已累计的更多页 */
+  /** 拉首屏（替换整个 feed）并记录游标；view 或 refreshKey 变化时调用 */
+  const loadFirst = useCallback(async (v: HotspotView) => {
+    feedBusy.current = true;
+    try {
+      const page = await getHotspots(v, FEED_PAGE);
+      setFeed(page.items);
+      setFeedTotal(page.total);
+      feedCursor.current = page.next;
+      feedInited.current = true;
+      setHasMore(!!page.next);
+    } catch {
+      /* 保持现状 */
+    } finally {
+      feedBusy.current = false;
+    }
+  }, []);
+
+  /** view 变化：重置并重新加载首屏 */
+  const applyView = useCallback(
+    (patch: Partial<HotspotView>) => {
+      setView((prev) => {
+        const next = { ...prev, ...patch };
+        void loadFirst(next);
+        return next;
+      });
+    },
+    [loadFirst],
+  );
+
+  /** 每 8s 拉首屏：新热点前插、已有条目就地刷新（沿用当前游标），保留已累计的更多页 */
   useEffect(() => {
     let alive = true;
     let timer: number | undefined;
     const tick = async () => {
       try {
-        const fresh = await getHotspots(FEED_PAGE);
-        if (!alive || fresh.length === 0) return;
+        const fresh = await getHotspots(view, FEED_PAGE);
+        if (!alive || fresh.items.length === 0) return;
         if (!feedInited.current) {
           feedInited.current = true;
-          setHasMore(fresh.length === FEED_PAGE);
+          feedCursor.current = fresh.next;
+          setHasMore(!!fresh.next);
         }
+        setFeedTotal(fresh.total);
         setFeed((prev) => {
-          if (prev.length === 0) return fresh;
+          if (prev.length === 0) return fresh.items;
           const ids = new Set(prev.map((h) => h.id));
-          const byId = new Map(fresh.map((h) => [h.id, h] as const));
-          return [...fresh.filter((h) => !ids.has(h.id)), ...prev.map((h) => byId.get(h.id) ?? h)];
+          const byId = new Map(fresh.items.map((h) => [h.id, h] as const));
+          return [...fresh.items.filter((h) => !ids.has(h.id)), ...prev.map((h) => byId.get(h.id) ?? h)];
         });
       } catch {
         /* 拉取失败保持现状 */
@@ -70,23 +121,28 @@ export default function App() {
       alive = false;
       window.clearInterval(timer);
     };
-  }, [refreshKey]);
+  }, [view, refreshKey]);
+
+  // 首次进入 / refreshKey 变化：拿当前 view 做一次首屏
+  useEffect(() => {
+    void loadFirst(view);
+  }, [refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadMore = useCallback(async () => {
-    const last = feed[feed.length - 1];
-    if (!last || loadingMore || !hasMore) return;
+    if (feedBusy.current || loadingMore || !feedCursor.current) return;
     setLoadingMore(true);
     try {
-      const more = await getHotspots(FEED_PAGE, `${last.publishedAt}|${last.hotScore}|${last.id}`);
+      const page = await getHotspots(view, FEED_PAGE, feedCursor.current);
       setFeed((prev) => {
         const ids = new Set(prev.map((h) => h.id));
-        return [...prev, ...more.filter((h) => !ids.has(h.id))];
+        return [...prev, ...page.items.filter((h) => !ids.has(h.id))];
       });
-      setHasMore(more.length === FEED_PAGE);
+      feedCursor.current = page.next;
+      setHasMore(!!page.next);
     } finally {
       setLoadingMore(false);
     }
-  }, [feed, loadingMore, hasMore]);
+  }, [view, loadingMore]);
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -221,6 +277,11 @@ export default function App() {
               hasMore={hasMore}
               loadingMore={loadingMore}
               onLoadMore={loadMore}
+              view={view}
+              onViewChange={applyView}
+              total={feedTotal}
+              sources={sources}
+              ranges={ranges}
             />
           ) : (
             <Config refreshKey={refreshKey} onNotice={pushNotice} />

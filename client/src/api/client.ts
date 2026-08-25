@@ -1,5 +1,5 @@
 import type {
-  AiSystem, AlertLog, CollectResult, Health, Hotspot, Keyword, Range, Source, Stats,
+  AiSystem, AlertLog, CollectResult, Health, HotspotPage, HotspotView, Keyword, Range, Source, Stats,
 } from '../types.ts';
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -21,8 +21,25 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const getHealth = () => api<Health>('/api/health');
 export const getStats = () => api<Stats>('/api/stats');
-export const getHotspots = (limit = 30, before?: string) =>
-  api<Hotspot[]>(`/api/hotspots?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`);
+
+/** 由视图 + 游标拼热点流请求；before 由上一页 next 传入 */
+export function getHotspots(view: HotspotView, limit = 30, before?: string | null) {
+  const p = new URLSearchParams({ limit: String(limit) });
+  p.set('sort', view.sort);
+  p.set('order', view.order);
+  if (view.sources.length) p.set('source', view.sources.join(','));
+  if (view.range) p.set('range', view.range);
+  if (view.statuses.length) p.set('status', view.statuses.join(','));
+  if (view.windowMin != null && view.windowMin > 0) {
+    p.set('since', new Date(Date.now() - view.windowMin * 60_000).toISOString());
+  }
+  if (view.type) p.set('type', view.type);
+  if (view.relevanceMin != null) p.set('relevanceMin', String(view.relevanceMin));
+  if (view.scoreMin != null) p.set('scoreMin', String(view.scoreMin));
+  if (view.q.trim()) p.set('q', view.q.trim());
+  if (before) p.set('before', before);
+  return api<HotspotPage>(`/api/hotspots?${p.toString()}`);
+}
 export const getSources = () => api<Source[]>('/api/sources');
 export const getKeywords = () => api<Keyword[]>('/api/keywords');
 export const getRanges = () => api<Range[]>('/api/ranges');

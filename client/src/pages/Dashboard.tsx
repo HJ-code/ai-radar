@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type UIEvent } from 'react';
-import type { Hotspot, Source } from '../types.ts';
-import { getAiSystem, getAlerts, getKeywords, getSources, getStats, setAiEnabled, testAi, testNotify, updateSource } from '../api/client.ts';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from 'react';
+import type { Hotspot, HotspotView, Range, Source } from '../types.ts';
+import { getAiSystem, getAlerts, getKeywords, getStats, setAiEnabled, testAi, testNotify, updateSource } from '../api/client.ts';
 import { usePoll } from '../hooks/usePoll.ts';
 import { relTime } from '../util/time.ts';
 import Radar from '../components/Radar.tsx';
 import HotspotCard from '../components/HotspotCard.tsx';
 import Toggle from '../components/Toggle.tsx';
+import FeedControls from '../components/FeedControls.tsx';
 import { BorderBeam } from '../components/ui/BorderBeam.tsx';
 import { FieldSelect } from '../components/ui/FieldSelect.tsx';
 import { GlareCard } from '../components/ui/GlareCard.tsx';
@@ -18,6 +19,20 @@ function parseExtra(json: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+/** 冷却秒级倒计时：endAt = 冷却结束的绝对时间戳（稳定），本地 1s tick 连续递减，只重渲自身。
+ *  注意：不要把 Date.now()+剩余 当 prop 传入——Dashboard 重渲会让它每次变，effect 反复重置导致跳秒。 */
+function AiCooldown({ endAt }: { endAt: number }) {
+  const [leftMs, setLeftMs] = useState(0);
+  useEffect(() => {
+    const tick = () => setLeftMs(Math.max(0, endAt - Date.now()));
+    tick();
+    const t = window.setInterval(tick, 1000);
+    return () => window.clearInterval(t);
+  }, [endAt]);
+  if (leftMs <= 0) return <span className="text-signal">可处理</span>;
+  return <span className="text-warn">冷却 {Math.ceil(leftMs / 1000)}s 后自动处理</span>;
 }
 
 /** 数据源行内配置编辑器：rss 编辑 feed 列表，github 调最低 Stars，bilibili 调分区 */
@@ -115,6 +130,64 @@ function SourceConfigEditor({ s, onSaved, onNotice }: { s: Source; onSaved: () =
   );
 }
 
+interface SourceRowProps {
+  id: number;
+  displayName: string;
+  sourceKey: string;
+  enabled: boolean;
+  intervalMinutes: number;
+  lastRunAt: string | null;
+  /** 原始 extra_json（编辑器用） */
+  extraJson: string;
+  busy: boolean;
+  onToggle: (id: number, name: string, v: boolean) => void;
+  onInterval: (id: number, name: string, m: number) => void;
+  onNotice: (m: string) => void;
+}
+
+/** 数据源行：标量 props + memo，轮询/整页重渲时只有变化的行才重建；busy 期间禁点并降透明度 */
+const SourceRow = memo(function SourceRow({ id, displayName, sourceKey, enabled, intervalMinutes, lastRunAt, extraJson, busy, onToggle, onInterval, onNotice }: SourceRowProps) {
+  const [configuring, setConfiguring] = useState(false);
+  const s: Source = useMemo(
+    () => ({ id, displayName, sourceKey, enabled, intervalMinutes, lastRunAt, apiKey: null, extraJson }),
+    [id, displayName, sourceKey, enabled, intervalMinutes, lastRunAt, extraJson],
+  );
+  return (
+    <div className={`space-y-1${busy ? ' pointer-events-none opacity-70' : ''}`}>
+      <div className="glass rounded-lg px-3 py-1.5 flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm text-slate-200 truncate">{displayName}</div>
+          <div className="font-mono2 text-[10px] text-slate-500 truncate">
+            {sourceKey} · {lastRunAt ? `上次 ${relTime(lastRunAt)}` : '未运行'}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setConfiguring((c) => !c)}
+          className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border transition-colors cursor-pointer ${
+            configuring ? 'border-neon/50 text-neon' : 'border-slate-600/60 text-slate-400 hover:text-slate-200 hover:border-slate-400'
+          }`}
+          title="编辑源配置"
+        >
+          配置
+        </button>
+        <FieldSelect
+          value={intervalMinutes}
+          onChange={(n) => onInterval(id, displayName, n)}
+          options={INTERVALS}
+          title="轮询间隔（分钟）"
+          suffix="m"
+          className="shrink-0"
+        />
+        <Toggle on={enabled} disabled={busy} onChange={(v) => onToggle(id, displayName, v)} />
+      </div>
+      {configuring && (
+        <SourceConfigEditor s={s} onSaved={() => setConfiguring(false)} onNotice={onNotice} />
+      )}
+    </div>
+  );
+});
+
 interface Props {
   hotspots: Hotspot[];
   refreshKey: number;
@@ -122,47 +195,113 @@ interface Props {
   loadingMore: boolean;
   onLoadMore: () => void;
   onNotice: (msg: string) => void;
+  view: HotspotView;
+  onViewChange: (patch: Partial<HotspotView>) => void;
+  total: number | null;
+  sources: Source[];
+  ranges: Range[];
 }
 
 const INTERVALS = [5, 10, 15, 30, 60];
 
-export default function Dashboard({ hotspots, refreshKey, hasMore, loadingMore, onLoadMore, onNotice }: Props) {
+export default function Dashboard({ hotspots, refreshKey, hasMore, loadingMore, onLoadMore, onNotice, view, onViewChange, total, sources, ranges }: Props) {
   const statsPoll = usePoll(getStats, 8000, [refreshKey]);
-  const sourcesPoll = usePoll(getSources, 8000, [refreshKey]);
-  const aiPoll = usePoll(getAiSystem, 30000, [refreshKey]);
+  const aiPoll = usePoll(getAiSystem, 8000, [refreshKey]);
   const alertsPoll = usePoll(() => getAlerts(12), 15000, []);
   const keywordsPoll = usePoll(getKeywords, 30000, []);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiResult, setAiResult] = useState<string | null>(null);
   const [notifyBusy, setNotifyBusy] = useState(false);
-  const [configuredSrc, setConfiguredSrc] = useState<number | null>(null);
+  /** 数据源本地乐观覆盖：切换立即反馈，服务端确认后写入同值，避免等整页轮询 */
+  const [srcPending, setSrcPending] = useState<Record<number, Partial<Source>>>({});
+  const [srcBusyId, setSrcBusyId] = useState<number | null>(null);
+  /** AI 依据折叠区：父组件持有的展开 id 集合（单卡切换 + 一键全部展开/折叠） */
+  const [reasonOpenIds, setReasonOpenIds] = useState<Set<number>>(new Set());
 
   const stats = statsPoll.data;
-  const sources = sourcesPoll.data ?? [];
   const ai = aiPoll.data;
   const alerts = alertsPoll.data ?? [];
   const top = hotspots[0];
   const keywords = (keywordsPoll.data ?? []).filter((k) => k.enabled).map((k) => k.keyword.trim()).filter(Boolean);
 
-  async function setEnabled(s: Source, v: boolean) {
-    try {
-      await updateSource(s.id, { enabled: v });
-      sourcesPoll.reload();
-      onNotice(`${s.displayName} ${v ? '已启用' : '已停用'}`);
-    } catch (e) {
-      onNotice(`操作失败：${(e as Error).message}`);
-    }
+  /** 渲染用数据源：本地乐观值优先，轮询真值兜底 */
+  const effectiveSources = useMemo(
+    () => sources.map((s) => (srcPending[s.id] ? { ...s, ...srcPending[s.id] } : s)),
+    [sources, srcPending],
+  );
+
+  /** 卡片标签点击 → 套用筛选；关键词落到搜索框 */
+  function handleTagClick(kind: 'source' | 'range' | 'keyword', value: string) {
+    onNotice(`筛选 · ${value}`);
+    if (kind === 'source') onViewChange({ sources: view.sources.includes(value) ? view.sources : [...view.sources, value] });
+    else if (kind === 'range') onViewChange({ range: value });
+    else onViewChange({ q: value });
   }
 
-  async function setInterval(s: Source, minutes: number) {
-    try {
-      await updateSource(s.id, { intervalMinutes: minutes });
-      sourcesPoll.reload();
-      onNotice(`${s.displayName} 间隔已改为 ${minutes} 分钟`);
-    } catch (e) {
-      onNotice(`操作失败：${(e as Error).message}`);
-    }
+  function handleClear() {
+    onViewChange({
+      sources: [],
+      range: null,
+      statuses: [],
+      windowMin: null,
+      type: null,
+      relevanceMin: null,
+      scoreMin: null,
+      q: '',
+    });
+    onNotice('已清除全部排序筛选');
   }
+
+  /** 单卡切换 AI 依据折叠 */
+  function toggleReason(id: number) {
+    setReasonOpenIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  const allReasonsOpen = hotspots.length > 0 && reasonOpenIds.size >= hotspots.length;
+
+  /** 一键展开/折叠所有卡片的 AI 依据（展开=收录当前全部 id；新到的返回靠单卡切换） */
+  function toggleAllReasons() {
+    setReasonOpenIds(allReasonsOpen ? new Set() : new Set(hotspots.map((h) => h.id)));
+  }
+
+  const setEnabled = useCallback(async (id: number, name: string, v: boolean) => {
+    setSrcPending((p) => ({ ...p, [id]: { ...(p[id] ?? {}), enabled: v } }));
+    setSrcBusyId(id);
+    try {
+      const updated = await updateSource(id, { enabled: v });
+      setSrcPending((p) => ({ ...p, [id]: { ...(p[id] ?? {}), enabled: updated.enabled } }));
+      onNotice(`${name} ${v ? '已启用' : '已停用'}`);
+    } catch (e) {
+      setSrcPending((p) => ({ ...p, [id]: { ...(p[id] ?? {}), enabled: !v } }));
+      onNotice(`操作失败：${(e as Error).message}`);
+    } finally {
+      setSrcBusyId(null);
+    }
+  }, [onNotice]);
+
+  const setInterval = useCallback(async (id: number, name: string, minutes: number) => {
+    setSrcPending((p) => ({ ...p, [id]: { ...(p[id] ?? {}), intervalMinutes: minutes } }));
+    setSrcBusyId(id);
+    try {
+      const updated = await updateSource(id, { intervalMinutes: minutes });
+      setSrcPending((p) => ({ ...p, [id]: { ...(p[id] ?? {}), intervalMinutes: updated.intervalMinutes } }));
+      onNotice(`${name} 间隔已改为 ${minutes} 分钟`);
+    } catch (e) {
+      setSrcPending((p) => {
+        const cur = { ...(p[id] ?? {}) };
+        delete cur.intervalMinutes;
+        return { ...p, [id]: cur };
+      });
+      onNotice(`操作失败：${(e as Error).message}`);
+    } finally {
+      setSrcBusyId(null);
+    }
+  }, [onNotice]);
 
   async function runAiSelfCheck() {
     setAiBusy(true);
@@ -307,39 +446,63 @@ export default function Dashboard({ hotspots, refreshKey, hasMore, loadingMore, 
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_400px] gap-5 items-stretch">
         {/* 左：统计 + 热点流（随右列拉升等高自适应） */}
         <div className="flex flex-col gap-5 min-w-0 min-h-0">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 shrink-0">
-            {statsTiles.map((s) => (
-              <div key={s.label} className="glass rounded-xl px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: s.color, boxShadow: `0 0 8px ${s.color}` }} />
-                  <div className={`hud-display text-2xl ${s.color} glow-text`}>{s.value}</div>
+          <GlareCard className="rounded-2xl shrink-0">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {statsTiles.map((s) => (
+                <div key={s.label} className="glass rounded-xl px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: s.color, boxShadow: `0 0 8px ${s.color}` }} />
+                    <div className={`hud-display text-2xl ${s.color} glow-text`}>{s.value}</div>
+                  </div>
+                  <div className="hud-label text-[9px] text-slate-500 uppercase mt-1 pl-3.5">{s.label}</div>
                 </div>
-                <div className="hud-label text-[9px] text-slate-500 uppercase mt-1 pl-3.5">{s.label}</div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          </GlareCard>
 
           <section className="glass rounded-2xl p-5 flex flex-col min-h-0 flex-1">
             <div className="mb-3 flex items-center justify-between shrink-0">
               <h2 className="hud-label text-[11px] text-slate-400">LIVE HOTSPOTS — 实时热点</h2>
-              <span className="font-mono2 text-[11px] text-slate-500">
-                已加载 {hotspots.length}
-                {stats?.hotspots ? ` · 共 ${stats.hotspots}` : ''}
-              </span>
+              {hotspots.length > 0 && (
+                <button
+                  onClick={toggleAllReasons}
+                  title="一键展开/折叠所有卡片的 AI 依据"
+                  className="font-mono2 text-[9px] text-slate-500 hover:text-neon border border-white/10 rounded px-1.5 py-0.5 transition-colors"
+                >
+                  AI 依据 · {allReasonsOpen ? '全部折叠' : '全部展开'}
+                </button>
+              )}
             </div>
+            <FeedControls
+              view={view}
+              onChange={onViewChange}
+              onClear={handleClear}
+              sources={sources}
+              ranges={ranges}
+              total={total}
+              loaded={hotspots.length}
+            />
             {/* 列表容器 absolute 脱离行高贡献：左栏不撑破栅格（行高由右栏决定），同时面板可拉满至右栏底边 */}
-            <div className="relative min-h-0 flex-1">
+            <div className="relative min-h-0 flex-1 mt-3">
               <div className="overflow-y-auto overflow-x-hidden pr-1 xl:absolute xl:inset-0" onScroll={handleFeedScroll}>
                 <div className="space-y-3">
                 {hotspots.length === 0 ? (
                   <div className="py-16 text-center text-sm text-slate-500">
                     <div className="font-mono2 text-neon/70 mb-2 animate-pulse">◉</div>
-                    <p>采集器入库中…… 热点即将抵达雷达屏幕</p>
+                    <p>无匹配热点（可调整排序/筛选，或等采集器入库）</p>
                   </div>
                 ) : (
                   hotspots.map((h, i) => (
                     <Reveal key={h.id} y={12} delay={Math.min(i * 0.015, 0.4)}>
-                      <HotspotCard h={h} now={Date.now()} onShare={shareHotspot} keywords={keywords} />
+                      <HotspotCard
+                        h={h}
+                        now={Date.now()}
+                        onShare={shareHotspot}
+                        keywords={keywords}
+                        onTagClick={handleTagClick}
+                        reasonOpen={reasonOpenIds.has(h.id)}
+                        onReasonToggle={() => toggleReason(h.id)}
+                      />
                     </Reveal>
                   ))
                 )}
@@ -372,54 +535,28 @@ export default function Dashboard({ hotspots, refreshKey, hasMore, loadingMore, 
             <div className="mb-3 flex items-center justify-between">
               <h2 className="hud-label text-[11px] text-slate-400">DATA SOURCES — 数据源</h2>
               <span className="font-mono2 text-[11px] text-slate-500">
-                {sources.filter((s) => s.enabled).length}/{sources.length} 在线
+                {effectiveSources.filter((s) => s.enabled).length}/{effectiveSources.length} 在线
               </span>
             </div>
             <div className="space-y-2">
-              {sources.length === 0 ? (
+              {effectiveSources.length === 0 ? (
                 <div className="text-sm text-slate-500 py-4 text-center">加载数据源中……</div>
               ) : (
-                sources.map((s) => (
-                  <div key={s.id} className="space-y-1">
-                    <div className="glass rounded-lg px-3 py-1.5 flex items-center gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="text-sm text-slate-200 truncate">{s.displayName}</div>
-                        <div className="font-mono2 text-[10px] text-slate-500 truncate">
-                          {s.sourceKey} · {s.lastRunAt ? `上次 ${relTime(s.lastRunAt)}` : '未运行'}
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => setConfiguredSrc(configuredSrc === s.id ? null : s.id)}
-                        className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border transition-colors cursor-pointer ${
-                          configuredSrc === s.id
-                            ? 'border-neon/50 text-neon'
-                            : 'border-slate-600/60 text-slate-400 hover:text-slate-200 hover:border-slate-400'
-                        }`}
-                        title="编辑源配置"
-                      >
-                        配置
-                      </button>
-                      <FieldSelect
-                        value={s.intervalMinutes}
-                        onChange={(n) => setInterval(s, n)}
-                        options={INTERVALS}
-                        title="轮询间隔（分钟）"
-                        suffix="m"
-                        className="shrink-0"
-                      />
-                      <Toggle on={s.enabled} onChange={(v) => setEnabled(s, v)} />
-                    </div>
-                    {configuredSrc === s.id && (
-                      <SourceConfigEditor
-                        s={s}
-                        onSaved={() => {
-                          setConfiguredSrc(null);
-                          sourcesPoll.reload();
-                        }}
-                        onNotice={onNotice}
-                      />
-                    )}
-                  </div>
+                effectiveSources.map((s) => (
+                  <SourceRow
+                    key={s.id}
+                    id={s.id}
+                    displayName={s.displayName}
+                    sourceKey={s.sourceKey}
+                    enabled={s.enabled}
+                    intervalMinutes={s.intervalMinutes}
+                    lastRunAt={s.lastRunAt}
+                    extraJson={s.extraJson}
+                    busy={srcBusyId === s.id}
+                    onToggle={setEnabled}
+                    onInterval={setInterval}
+                    onNotice={onNotice}
+                  />
                 ))
               )}
             </div>
@@ -436,14 +573,29 @@ export default function Dashboard({ hotspots, refreshKey, hasMore, loadingMore, 
               )}
             </div>
             {ai ? (
-              <div className={`font-mono2 text-[11px] space-y-1 ${ai.enabled ? 'text-slate-400' : 'text-slate-600'}`}>
-                <div>模型：<span className={ai.enabled ? 'text-slate-200' : 'text-slate-500'}>{ai.model || '（未配置）'}</span></div>
-                <div className="truncate">服务：<span className={ai.enabled ? 'text-slate-200' : 'text-slate-500'} title={ai.baseUrl}>{ai.baseUrl || '—'}</span></div>
-                <div>
+              <div className="space-y-2">
+                {/* 处理进度：待鉴定队列 + 冷却倒计时 */}
+                <div className="font-mono2 text-[11px] flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5">
+                  <span className={ai.enabled ? 'text-slate-300' : 'text-slate-500'}>
+                    待鉴定 <b className={ai.pendingCount > 0 ? 'text-neon' : 'text-slate-400'}>{ai.pendingCount}</b> 条
+                  </span>
+                  <span className="text-slate-400 shrink-0">
+                    {ai.pendingCount === 0
+                      ? '队列已清空'
+                      : ai.cooldownRemainingMs > 0 && ai.enabled
+                        ? <AiCooldown endAt={ai.lastProcessedAt > 0 ? ai.lastProcessedAt + ai.cooldownMs : 0} />
+                        : '等待下一轮调度'}
+                  </span>
+                </div>
+                {/* 运行参数（去掉模型与服务信息） */}
+                <div className={`font-mono2 text-[11px] ${ai.enabled ? 'text-slate-400' : 'text-slate-600'}`}>
                   相关阈值 <span className="text-slate-200">{ai.minRelevance}</span> · 每轮{' '}
                   <span className="text-slate-200">{ai.maxPerRun}</span> 条 · 熔断{' '}
                   <span className={ai.failStreak >= 3 ? 'text-danger' : 'text-slate-200'}>{ai.failStreak}/3</span>
                 </div>
+                <p className="text-[10px] text-slate-600 leading-relaxed">
+                  手动「采集」会连续处理队列；自动轮询按冷却节流
+                </p>
               </div>
             ) : (
               <div className="text-xs text-slate-500">读取 AI 配置中……</div>

@@ -48,6 +48,22 @@ export interface Range {
   createdAt: string;
 }
 
+export type HotspotSortKey = 'smart' | 'published' | 'collected' | 'hot' | 'engagement' | 'relevance';
+export type HotspotOrder = 'desc' | 'asc';
+
+export interface HotspotView {
+  sort: HotspotSortKey;
+  order: HotspotOrder;
+  sources: string[];
+  range: string | null;
+  statuses: AiStatus[];
+  windowMin: number | null; // 分钟；null=全部
+  type: 'news' | 'interactive' | null;
+  relevanceMin: number | null;
+  scoreMin: number | null;
+  q: string;
+}
+
 export interface Hotspot {
   id: number;
   itemId: number | null;
@@ -57,6 +73,11 @@ export interface Hotspot {
   sourceKey: string;
   author: string | null;
   hotScore: number;
+  engagementMagnitude: number;
+  /** 互动细分对象（反规范化，如 HN {points,comments} / GitHub {stars,forks} / B站 {view,like,reply,danmaku}） */
+  engagement?: Record<string, number | string | null>;
+  /** AI 依据：判定理由 + 相关度理由；规则降级/存量无则 null */
+  aiReasons?: { verdict?: string; relevance?: string } | null;
   rangeName: string | null;
   keywords: string[];
   aiStatus: AiStatus;
@@ -64,6 +85,12 @@ export interface Hotspot {
   summaryZh: string | null;
   publishedAt: string;
   createdAt: string;
+}
+
+export interface HotspotPage {
+  items: Hotspot[];
+  next: string | null;
+  total: number;
 }
 
 export interface AiSystem {
@@ -77,6 +104,14 @@ export interface AiSystem {
   timeoutMs: number;
   cooldownMs: number;
   failStreak: number;
+  /** 待 AI/规则鉴定的队列长度 */
+  pendingCount: number;
+  /** 距下次可自动处理的剩余毫秒；0=可立即处理 */
+  cooldownRemainingMs: number;
+  /** 最近一次处理起始时间（epoch ms） */
+  lastProcessedAt: number;
+  /** 最近一次处理模式：ai/rules/probe/skipped/none */
+  lastMode: string;
 }
 
 export interface CollectResult {

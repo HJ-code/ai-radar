@@ -1,5 +1,5 @@
 import { config } from '../config.ts';
-import { listUnscored, markItemNotified, updateItemAi } from '../repositories/items.ts';
+import { listUnscored, markItemNotified, updateItemAi, countUnscored } from '../repositories/items.ts';
 import type { ItemRow } from '../repositories/types.ts';
 import { insertHotspotIfAbsent } from '../repositories/hotspots.ts';
 import { listEnabledKeywords, markKeywordTriggered } from '../repositories/keywords.ts';
@@ -7,6 +7,7 @@ import { listEnabledRanges } from '../repositories/ranges.ts';
 import { listSources } from '../repositories/sources.ts';
 import { getSetting, setSetting } from '../repositories/settings.ts';
 import { getExtra } from '../util/helpers.ts';
+import { engagementMagnitude } from '../util/helpers.ts';
 import { AiClient, AiError } from '../ai/client.ts';
 import { buildAnalysisMessages, type ScopeCtx } from '../ai/prompts.ts';
 import type { AiAnalysis, AiVerdict, AnalysisItemCtx } from '../ai/types.ts';
@@ -17,8 +18,12 @@ export interface AiRunReport {
   mode: 'ai' | 'probe' | 'rules' | 'none' | 'skipped';
 }
 
-/** 保存最近一次 AI 处理时间，供外部做冷却判断 */
-export const aiRuntime = { lastRunAt: 0 };
+/** 保存最近一次 AI 处理信息，供外部做冷却判断与进度展示 */
+export const aiRuntime = {
+  lastRunAt: 0,
+  lastProcessed: 0,
+  lastMode: 'none' as AiRunReport['mode'],
+};
 
 export interface AiStatusInfo {
   configured: boolean;
@@ -31,6 +36,13 @@ export interface AiStatusInfo {
   timeoutMs: number;
   cooldownMs: number;
   failStreak: number;
+  /** 待鉴定队列长度 */
+  pendingCount: number;
+  /** 距下次允许自动处理的剩余毫秒；0 = 可立即处理 */
+  cooldownRemainingMs: number;
+  /** 最近一次处理的起始时间（epoch ms）；从未处理为 0 */
+  lastProcessedAt: number;
+  lastMode: AiRunReport['mode'];
 }
 
 const AI_MAX_STREAK = 3;
@@ -71,6 +83,9 @@ function getClient(): AiClient | null {
 
 export function aiStatus(): AiStatusInfo {
   const creds = Boolean(config.ai.baseUrl && config.ai.apiKey && config.ai.model);
+  const now = Date.now();
+  const last = aiRuntime.lastRunAt;
+  const cooldownRemainingMs = last ? Math.max(0, config.ai.cooldownMs - (now - last)) : 0;
   return {
     configured: creds,
     enabled: effectiveEnabled(),
@@ -82,6 +97,10 @@ export function aiStatus(): AiStatusInfo {
     timeoutMs: config.ai.timeoutMs,
     cooldownMs: config.ai.cooldownMs,
     failStreak,
+    pendingCount: countUnscored(),
+    cooldownRemainingMs,
+    lastProcessedAt: last,
+    lastMode: aiRuntime.lastMode,
   };
 }
 
@@ -114,23 +133,8 @@ export function normalizeAnalysis(raw: unknown): AiAnalysis {
   const relevance = Math.max(0, Math.min(100, Math.round(Number(o.relevance) || 0)));
   const summary = typeof o.summary === 'string' ? o.summary.slice(0, 80) : '';
   const reasons = typeof o.reasons === 'string' ? o.reasons.slice(0, 80) : '';
-  return { verdict, relevance, summary, reasons };
-}
-
-/** 从 engagement_json 提取一个总的互动量级数字（各源字段不同，取最大值） */
-export function engagementMagnitude(engagementJson: string): number {
-  let obj: unknown;
-  try { obj = JSON.parse(engagementJson || '{}'); } catch { return 0; }
-  if (!obj || typeof obj !== 'object') return 0;
-  const numericKeys = ['points', 'score', 'stars', 'downloads', 'likes', 'comments', 'num_comments', 'forks', 'ups'];
-  let max = 0;
-  for (const entry of Object.entries(obj as Record<string, unknown>)) {
-    const [k, v] = entry;
-    if (numericKeys.includes(k) && typeof v === 'number' && Number.isFinite(v)) {
-      max = Math.max(max, v);
-    }
-  }
-  return max;
+  const relevanceReason = typeof o.relevance_reason === 'string' ? o.relevance_reason.slice(0, 80) : '';
+  return { verdict, relevance, summary, reasons, relevanceReason };
 }
 
 /** 各交互型源的互动准入门槛；数值可被源 extraJson 的 min<字段> 覆盖。RSS 等资讯型源不在此表内 → 豁免。 */
@@ -210,7 +214,14 @@ function hotScoreFor(relevance: number, magnitude: number, verdict?: AiVerdict):
   return verdict === 'doubtful' ? Math.round(base * 0.5) : base;
 }
 
-function persistHotspot(item: ItemRow, aiStatus: string, aiRelevance: number, summaryZh: string | null, verdict?: AiVerdict): { inserted: boolean; id: number } | null {
+function persistHotspot(
+  item: ItemRow,
+  aiStatus: string,
+  aiRelevance: number,
+  summaryZh: string | null,
+  aiReasons: string | null,
+  verdict?: AiVerdict,
+): { inserted: boolean; id: number } | null {
   if (!item.url) return null;
   return insertHotspotIfAbsent({
     itemId: item.id,
@@ -220,6 +231,9 @@ function persistHotspot(item: ItemRow, aiStatus: string, aiRelevance: number, su
     sourceKey: item.sourceKey,
     author: item.author,
     hotScore: hotScoreFor(aiRelevance, engagementMagnitude(item.engagementJson), verdict),
+    engagementMagnitude: engagementMagnitude(item.engagementJson),
+    engagementJson: item.engagementJson,
+    aiReasons,
     rangeName: bestRangeName(item),
     aiStatus,
     aiRelevance,
@@ -262,7 +276,8 @@ async function maybeNotify(item: ItemRow, hotspotId: number, a: AiAnalysis): Pro
 async function applyAi(item: ItemRow, a: AiAnalysis, gatePass: boolean): Promise<void> {
   updateItemAi(item.id, { aiStatus: a.verdict, aiRelevance: a.relevance, summaryZh: a.summary || null });
   if (a.verdict === 'fake' || a.relevance < config.ai.minRelevance || !gatePass) return;
-  const hs = persistHotspot(item, a.verdict, a.relevance, a.summary || null, a.verdict);
+  const aiReasons = JSON.stringify({ verdict: a.reasons, relevance: a.relevanceReason });
+  const hs = persistHotspot(item, a.verdict, a.relevance, a.summary || null, aiReasons, a.verdict);
   if (!hs) return;
   if (hs.inserted && a.verdict === 'real' && !item.notified) {
     await maybeNotify(item, hs.id, a);
@@ -274,23 +289,12 @@ function applyRules(item: ItemRow, scope: ScopeCtx, gatePass: boolean): void {
   const relevance = ruleRelevance(item, scope);
   updateItemAi(item.id, { aiStatus: 'unscored', aiRelevance: relevance, summaryZh: null });
   if (relevance < config.ai.minRelevance || !gatePass) return;
-  persistHotspot(item, 'unscored', relevance, null);
+  persistHotspot(item, 'unscored', relevance, null, null);
 }
 
-/**
- * 处理待鉴定条目：
- * - 未配置 AI → 全量规则降级；
- * - 连续失败达上限 → 用第一条做恢复探测（probe），其余降级；
- * - 成功 → 三道关 AI 处理，失败的单条回落规则、软件中断。
- * 自身带冷却，避免高频轮询时打爆 AI 端点。
- */
-export async function processPendingItems(): Promise<AiRunReport> {
-  const now = Date.now();
-  if (aiRuntime.lastRunAt && now - aiRuntime.lastRunAt < config.ai.cooldownMs) {
-    return { processed: 0, mode: 'skipped' };
-  }
-  aiRuntime.lastRunAt = now;
-
+/** 处理一批（最多 maxPerRun 条）：AI 三道关或规则降级；不检查冷却（由上层决定） */
+async function runBatch(): Promise<AiRunReport> {
+  aiRuntime.lastRunAt = Date.now();
   const items = listUnscored(config.ai.maxPerRun);
   if (!items.length) return { processed: 0, mode: 'none' };
 
@@ -329,6 +333,42 @@ export async function processPendingItems(): Promise<AiRunReport> {
   }
 
   return { processed, mode: aiOk ? 'ai' : 'rules' };
+}
+
+/**
+ * 处理待鉴定条目：
+ * - 默认（调度器自动轮询）：带冷却，避免高频轮询打爆 AI 端点；
+ * - skipCooldown（手动采集触发）：忽略冷却，循环把队列尽量处理完（波次上限防极端积压阻塞）。
+ * 无论哪种模式：未配置 AI → 规则降级；连续失败达上限 → 探针再失败回落规则。
+ */
+export async function processPendingItems(opts: { skipCooldown?: boolean } = {}): Promise<AiRunReport> {
+  const now = Date.now();
+  if (!opts.skipCooldown && aiRuntime.lastRunAt && now - aiRuntime.lastRunAt < config.ai.cooldownMs) {
+    return { processed: 0, mode: 'skipped' };
+  }
+
+  if (opts.skipCooldown) {
+    const MAX_FORCED_WAVES = 5;
+    let total = 0;
+    let lastGood: AiRunReport | null = null;
+    for (let wave = 0; wave < MAX_FORCED_WAVES; wave++) {
+      const r = await runBatch();
+      if (r.processed > 0 || r.mode === 'rules') lastGood = r;
+      total += r.processed;
+      if (r.processed === 0) break; // 队列清空或探针无进展，防死循环
+    }
+    const final = lastGood ?? { processed: total, mode: 'none' as AiRunReport['mode'] };
+    aiRuntime.lastProcessed = final.processed;
+    aiRuntime.lastMode = final.mode;
+    return final;
+  }
+
+  const r = await runBatch();
+  if (r.mode !== 'none') {
+    aiRuntime.lastProcessed = r.processed;
+    aiRuntime.lastMode = r.mode;
+  }
+  return r;
 }
 
 const SAMPLE_ITEM: ItemRow = {

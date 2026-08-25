@@ -59,6 +59,11 @@ export interface HotspotRow {
   sourceKey: string;
   author: string | null;
   hotScore: number;
+  engagementMagnitude: number;
+  /** 互动细分原始 JSON（反规范化自 items.engagement_json），API 层解析为对象 */
+  engagementJson: string;
+  /** AI 判定+相关度理由 JSON（`{"verdict":..,"relevance":..}`）；规则降级/存量无则 null */
+  aiReasons: string | null;
   rangeName: string | null;
   aiStatus: string;
   aiRelevance: number;
