@@ -22,7 +22,7 @@
 - **后端**：Node.js 24 · Express 5 · TypeScript（tsx 直跑，无编译步骤）· SQLite（Node 内置 `node:sqlite`，零原生依赖）
 - **前端**：React 19 · Vite 8 · TypeScript · Tailwind CSS v4
 - **AI 接入**：任意 OpenAI 兼容 `chat/completions` 服务（可插拔 `intelligence` 客户端）
-- **数据源**：Hacker News · GitHub（高星新仓库，≥500 星）· Bilibili（科技分区榜）· 中文 RSS（量子位/机器之心/IT之家/极客公园/雷锋网/InfoQ中文/开源中国）· Reddit/Google News/Hugging Face（可选接入）（全部免费）
+- **数据源**：Hacker News · GitHub（高星新仓库，≥500 星）· Bilibili（AI 关键词实时搜索）· 中文 RSS（量子位/机器之心/IT之家/极客公园/雷锋网/InfoQ中文/开源中国）· Reddit/Google News/Hugging Face（可选接入）（全部免费）
 
 ## 目录结构
 
@@ -122,7 +122,7 @@ AI_COOLDOWN_MS=60000      # 两轮 AI 处理间的冷却
 
 - Reddit / Google News / Hugging Face 在部分网络不可达（疑似需要代理）；采集器已就绪，失败自动降级，可换源或挂代理后直接可用。
 - GitHub 未带 Token 时每分钟限 10 次查询（已内置 6.5s 节流）；可在源配置填 `apiKey` 提升额度。采集默认只收近 7 天 `stars>500` 的新仓库，弱数据源已从源头过滤。
-- B 站科技分区榜 API 要求浏览器 User-Agent（否则 -352 风控），高频请求会临时限流；正常轮询频率下可用。
+- B 站采集走关键词实时搜索接口（`extraJson.searchKeywords`，默认 `GPT/Claude/DeepSeek/OpenAI/Gemini/大模型`）：需浏览器 UA + spi 换 buvid3/buvid4 设备 cookie，wbi 签名接口优先、遇风控自动降级普通 `search/type`，每词间隔 `searchThrottleMs`（默认 6s）节流；原分区榜 `ranking/v2` 无鉴权返回过期旧榜，已弃用。
 - 免费 AI 端点（如 opencode.ai 的 `mimo-v2.5`）单次调用较慢（15–45s），可调小 `AI_MAX_PER_RUN` 或换更快的模型（如 `deepseek-v4-flash`）。
 - 模型对训练截止日期之后的事件偏保守，可能把近期新闻判为 `存疑`；已放宽为「可信即 real」倾向，仍可在 `server/src/ai/prompts.ts` 再调整。
 
