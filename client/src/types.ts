@@ -74,6 +74,10 @@ export interface Hotspot {
   author: string | null;
   hotScore: number;
   engagementMagnitude: number;
+  /** 互动细分对象（反规范化，如 HN {points,comments} / GitHub {stars,forks} / B站 {view,like,reply,danmaku}） */
+  engagement?: Record<string, number | string | null>;
+  /** AI 依据：判定理由 + 相关度理由；规则降级/存量无则 null */
+  aiReasons?: { verdict?: string; relevance?: string } | null;
   rangeName: string | null;
   keywords: string[];
   aiStatus: AiStatus;

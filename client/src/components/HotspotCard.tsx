@@ -1,6 +1,7 @@
-import type { MouseEvent } from 'react';
+import { useState, type MouseEvent } from 'react';
 import type { Hotspot } from '../types.ts';
 import { relTime } from '../util/time.ts';
+import { fmtCount, SOURCE_ENGAGEMENT_LABELS } from '../util/engagement.ts';
 import AiBadge from './AiBadge.tsx';
 import { CardSpotlight } from './ui/CardSpotlight.tsx';
 
@@ -10,6 +11,9 @@ interface Props {
   onShare: (h: Hotspot) => void;
   keywords?: string[];
   onTagClick?: (kind: 'source' | 'range' | 'keyword', value: string) => void;
+  /** AI 依据折叠区展开状态（由父组件批量控制） */
+  reasonOpen?: boolean;
+  onReasonToggle?: () => void;
 }
 
 function CopyIcon() {
@@ -29,7 +33,8 @@ function ExternalIcon() {
   );
 }
 
-export default function HotspotCard({ h, now, onShare, keywords, onTagClick }: Props) {
+export default function HotspotCard({ h, now, onShare, keywords, onTagClick, reasonOpen, onReasonToggle }: Props) {
+  const [showRaw, setShowRaw] = useState(false);
   const summary = h.summaryZh?.trim();
   // RSS 等资讯型源结构性无互动量，不做“热度”伪装
   const newsType = h.sourceKey === 'rss';
@@ -43,10 +48,27 @@ export default function HotspotCard({ h, now, onShare, keywords, onTagClick }: P
     e.stopPropagation();
   }
 
-  function fmtMag(n: number): string {
-    if (!n) return '';
-    if (n >= 10000) return `${(n / 10000).toFixed(1)}w`;
-    return String(n);
+  // 互动细分徽章：仅展示该源存在的非零字段（资讯型不伪造热度）
+  const engagementChips: { label: string; value: number }[] = [];
+  const labelMap = SOURCE_ENGAGEMENT_LABELS[h.sourceKey];
+  if (labelMap && h.engagement) {
+    for (const [k, label] of Object.entries(labelMap)) {
+      const v = h.engagement[k];
+      if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+        engagementChips.push({ label, value: v });
+      }
+    }
+  }
+
+  // 新鲜度：抓取时间相对发布时间的滞后（越小越抢到第一手；发布≈抓取时不算）
+  let freshness: { text: string; fresh: boolean } | null = null;
+  const publishedMs = Date.parse(h.publishedAt);
+  const createdMs = Date.parse(h.createdAt);
+  if (createdMs && publishedMs && createdMs - publishedMs >= 60_000) {
+    const lagMin = Math.round((createdMs - publishedMs) / 60_000);
+    if (lagMin < 60) freshness = { text: `发布后 ${lagMin} 分钟`, fresh: true };
+    else if (lagMin < 1440) freshness = { text: `发布后 ${Math.round(lagMin / 60)} 小时`, fresh: false };
+    else freshness = { text: `发布后 ${Math.round(lagMin / 1440)} 天`, fresh: false };
   }
 
   const tagCls =
@@ -73,17 +95,31 @@ export default function HotspotCard({ h, now, onShare, keywords, onTagClick }: P
               资讯
             </span>
           )}
-          {h.engagementMagnitude > 0 && (
-            <span className={`${tagCls} border border-white/10 bg-white/5 text-slate-400`} title="互动量">
-              互动 {fmtMag(h.engagementMagnitude)}
-            </span>
-          )}
           {isHot && (
             <span className="font-mono2 text-[9px] text-warn border border-warn/40 rounded px-1 py-px bg-warn/10 animate-pulse">
               HOT 【{h.hotScore}】
             </span>
           )}
-          <span className="ml-auto font-mono2 text-[10px] text-slate-500">{relTime(h.createdAt, now)}</span>
+          <span className="ml-auto font-mono2 text-[10px] text-slate-500">发布 {relTime(h.publishedAt, now)}</span>
+        </div>
+
+        {/* 时间/互动元信息：抓取时间 + 新鲜度 + 按来源细分的互动徽章 */}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono2 text-[9px] text-slate-500">
+          {engagementChips.map((c) => (
+            <span key={c.label} className="text-slate-400" title={`${c.label} ${c.value}`}>
+              {c.label} {fmtCount(c.value)}
+            </span>
+          ))}
+          {engagementChips.length > 0 && <span className="text-slate-600">/</span>}
+          <span>抓取 {relTime(h.createdAt, now)}</span>
+          {freshness && (
+            <span
+              className={freshness.fresh ? 'text-signal' : 'text-slate-500'}
+              title="抓取相对发布时间的滞后（越小越抢到第一手）"
+            >
+              {freshness.text}
+            </span>
+          )}
         </div>
 
         {/* 命中的监控配置点：监控范围 + 追踪关键词（可点击筛选） */}
@@ -127,10 +163,59 @@ export default function HotspotCard({ h, now, onShare, keywords, onTagClick }: P
         </a>
 
         {summary ? (
-          <p className="text-xs text-slate-300/85 leading-relaxed">{summary}</p>
+          <div className="space-y-1">
+            <p className="text-xs text-slate-300/85 leading-relaxed">
+              <span className="align-middle mr-1 font-mono2 text-[8px] text-neon/70 border border-neon/25 rounded px-1 py-px">
+                AI 摘要
+              </span>
+              <span className="align-middle">{summary}</span>
+              {h.text && (
+                <button
+                  onClick={(e) => { stop(e); setShowRaw((s) => !s); }}
+                  title={showRaw ? '收起原始描述' : '展开原始描述查看'}
+                  className="ml-1.5 align-middle font-mono2 text-[9px] text-slate-500 hover:text-neon px-1 py-0.5 rounded transition-colors"
+                >
+                  {showRaw ? '原文 ▾' : '原文 ▸'}
+                </button>
+              )}
+            </p>
+            {showRaw && h.text && (
+              <p className="text-xs text-slate-500 leading-relaxed border-l border-white/10 pl-2 whitespace-pre-wrap">
+                {h.text}
+              </p>
+            )}
+          </div>
         ) : h.text ? (
-          <p className="text-xs text-slate-500 leading-relaxed line-clamp-3">{h.text}</p>
+          <p className="text-xs text-slate-500 leading-relaxed line-clamp-3">
+            <span className="mr-1 font-mono2 text-[8px] text-slate-500 border border-white/10 rounded px-1 py-px">原文</span>
+            {h.text}
+          </p>
         ) : null}
+
+        {/* AI 依据：判定理由 + 相关度理由（折叠展示，父组件可批量展开全部） */}
+        {h.aiReasons && (h.aiReasons.verdict || h.aiReasons.relevance) && (
+          <div>
+            <button
+              onClick={(e) => { stop(e); onReasonToggle?.(); }}
+              title={reasonOpen ? '折叠本卡 AI 依据' : '展开本卡 AI 依据'}
+              className="flex items-center gap-1 font-mono2 text-[9px] text-slate-500 hover:text-neon transition-colors"
+            >
+              <span className="text-[8px]">{reasonOpen ? '▾' : '▸'}</span>
+              <span className="border border-white/10 bg-white/5 rounded px-1 py-px">AI 依据</span>
+              <span className="text-slate-600">{reasonOpen ? '折叠' : '展开'}</span>
+            </button>
+            {reasonOpen && (
+              <div className="mt-1 space-y-1 text-[10px] text-slate-400 leading-relaxed rounded-md border border-white/10 bg-white/[0.04] px-2 py-1.5">
+                {h.aiReasons.verdict && (
+                  <p><span className="text-slate-500">判定 · </span>{h.aiReasons.verdict}</p>
+                )}
+                {h.aiReasons.relevance && (
+                  <p><span className="text-slate-500">相关 · </span>{h.aiReasons.relevance}</p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="mt-1 flex items-center gap-2">
           <div className="h-1 flex-1 rounded-full bg-white/5 overflow-hidden">

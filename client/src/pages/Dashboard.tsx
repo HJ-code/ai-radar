@@ -215,6 +215,8 @@ export default function Dashboard({ hotspots, refreshKey, hasMore, loadingMore, 
   /** 数据源本地乐观覆盖：切换立即反馈，服务端确认后写入同值，避免等整页轮询 */
   const [srcPending, setSrcPending] = useState<Record<number, Partial<Source>>>({});
   const [srcBusyId, setSrcBusyId] = useState<number | null>(null);
+  /** AI 依据折叠区：父组件持有的展开 id 集合（单卡切换 + 一键全部展开/折叠） */
+  const [reasonOpenIds, setReasonOpenIds] = useState<Set<number>>(new Set());
 
   const stats = statsPoll.data;
   const ai = aiPoll.data;
@@ -248,6 +250,23 @@ export default function Dashboard({ hotspots, refreshKey, hasMore, loadingMore, 
       q: '',
     });
     onNotice('已清除全部排序筛选');
+  }
+
+  /** 单卡切换 AI 依据折叠 */
+  function toggleReason(id: number) {
+    setReasonOpenIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  const allReasonsOpen = hotspots.length > 0 && reasonOpenIds.size >= hotspots.length;
+
+  /** 一键展开/折叠所有卡片的 AI 依据（展开=收录当前全部 id；新到的返回靠单卡切换） */
+  function toggleAllReasons() {
+    setReasonOpenIds(allReasonsOpen ? new Set() : new Set(hotspots.map((h) => h.id)));
   }
 
   const setEnabled = useCallback(async (id: number, name: string, v: boolean) => {
@@ -444,6 +463,15 @@ export default function Dashboard({ hotspots, refreshKey, hasMore, loadingMore, 
           <section className="glass rounded-2xl p-5 flex flex-col min-h-0 flex-1">
             <div className="mb-3 flex items-center justify-between shrink-0">
               <h2 className="hud-label text-[11px] text-slate-400">LIVE HOTSPOTS — 实时热点</h2>
+              {hotspots.length > 0 && (
+                <button
+                  onClick={toggleAllReasons}
+                  title="一键展开/折叠所有卡片的 AI 依据"
+                  className="font-mono2 text-[9px] text-slate-500 hover:text-neon border border-white/10 rounded px-1.5 py-0.5 transition-colors"
+                >
+                  AI 依据 · {allReasonsOpen ? '全部折叠' : '全部展开'}
+                </button>
+              )}
             </div>
             <FeedControls
               view={view}
@@ -466,7 +494,15 @@ export default function Dashboard({ hotspots, refreshKey, hasMore, loadingMore, 
                 ) : (
                   hotspots.map((h, i) => (
                     <Reveal key={h.id} y={12} delay={Math.min(i * 0.015, 0.4)}>
-                      <HotspotCard h={h} now={Date.now()} onShare={shareHotspot} keywords={keywords} onTagClick={handleTagClick} />
+                      <HotspotCard
+                        h={h}
+                        now={Date.now()}
+                        onShare={shareHotspot}
+                        keywords={keywords}
+                        onTagClick={handleTagClick}
+                        reasonOpen={reasonOpenIds.has(h.id)}
+                        onReasonToggle={() => toggleReason(h.id)}
+                      />
                     </Reveal>
                   ))
                 )}
