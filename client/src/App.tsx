@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { collectNow, getAiSystem, getAlerts, getHealth, getHotspots, testNotify } from './api/client.ts';
+import type { Hotspot } from './types.ts';
 import { usePoll } from './hooks/usePoll.ts';
 import { useStream } from './hooks/useStream.ts';
 import { getNotificationPermission, requestNotificationPermission, showBrowserNotification } from './util/notify.ts';
@@ -27,15 +28,65 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [unread, setUnread] = useState(0);
   const [permission, setPermission] = useState(() => getNotificationPermission());
-  const [feedLimit, setFeedLimit] = useState(30);
   const [bellOpen, setBellOpen] = useState(false);
   const [notifyBusy, setNotifyBusy] = useState(false);
+  /** 热点流：首屏一页 + 触底加载更多累计；每页固定 30 条 */
+  const FEED_PAGE = 30;
+  const [feed, setFeed] = useState<Hotspot[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const feedInited = useRef(false);
   const noticeTimer = useRef<number | undefined>(undefined);
 
   const healthPoll = usePoll(getHealth, 30000);
   const aiPoll = usePoll(getAiSystem, 30000);
   const alertsPoll = usePoll(() => getAlerts(10), 15000, []);
-  const hotspotsPoll = usePoll(() => getHotspots(feedLimit), 8000, [feedLimit]);
+
+  /** 每 8s 拉首屏：新热点前插、已有条目就地刷新，保留已累计的更多页 */
+  useEffect(() => {
+    let alive = true;
+    let timer: number | undefined;
+    const tick = async () => {
+      try {
+        const fresh = await getHotspots(FEED_PAGE);
+        if (!alive || fresh.length === 0) return;
+        if (!feedInited.current) {
+          feedInited.current = true;
+          setHasMore(fresh.length === FEED_PAGE);
+        }
+        setFeed((prev) => {
+          if (prev.length === 0) return fresh;
+          const ids = new Set(prev.map((h) => h.id));
+          const byId = new Map(fresh.map((h) => [h.id, h] as const));
+          return [...fresh.filter((h) => !ids.has(h.id)), ...prev.map((h) => byId.get(h.id) ?? h)];
+        });
+      } catch {
+        /* 拉取失败保持现状 */
+      }
+    };
+    void tick();
+    timer = window.setInterval(tick, 8000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [refreshKey]);
+
+  const loadMore = useCallback(async () => {
+    const last = feed[feed.length - 1];
+    if (!last || loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const more = await getHotspots(FEED_PAGE, `${last.publishedAt}|${last.hotScore}|${last.id}`);
+      setFeed((prev) => {
+        const ids = new Set(prev.map((h) => h.id));
+        return [...prev, ...more.filter((h) => !ids.has(h.id))];
+      });
+      setHasMore(more.length === FEED_PAGE);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [feed, loadingMore, hasMore]);
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -52,8 +103,8 @@ export default function App() {
     useCallback((a) => {
       setUnread((c) => c + 1);
       showBrowserNotification(a.keyword, { body: a.summaryZh || a.title, url: a.url });
-      setNotice(`${a.keyword} 命中：${a.title}`);
-    }, []),
+      pushNotice(`${a.keyword} 命中：${a.title}`);
+    }, [pushNotice]),
   );
 
   function handleBell() {
@@ -164,11 +215,12 @@ export default function App() {
         <main className="flex-1 max-w-[1400px] mx-auto w-full px-4 pt-4 pb-2">
           {tab === 'radar' ? (
             <Dashboard
-              hotspots={hotspotsPoll.data ?? []}
+              hotspots={feed}
               refreshKey={refreshKey}
               onNotice={pushNotice}
-              feedLimit={feedLimit}
-              onFeedLimit={setFeedLimit}
+              hasMore={hasMore}
+              loadingMore={loadingMore}
+              onLoadMore={loadMore}
             />
           ) : (
             <Config refreshKey={refreshKey} onNotice={pushNotice} />
@@ -179,7 +231,7 @@ export default function App() {
         <footer className="fixed bottom-0 inset-x-0 z-20 border-t border-white/10 bg-abyss/90 backdrop-blur-2xl px-4 py-2.5">
           <div className="max-w-[1400px] mx-auto flex items-center gap-4">
             <span className="hud-label text-[10px] text-neon shrink-0">▚ TICKER</span>
-            <Ticker hotspots={hotspotsPoll.data ?? []} />
+            <Ticker hotspots={feed} />
           </div>
         </footer>
       </div>

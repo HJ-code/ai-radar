@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type UIEvent } from 'react';
 import type { Hotspot, Source } from '../types.ts';
 import { getAiSystem, getAlerts, getKeywords, getSources, getStats, setAiEnabled, testAi, testNotify, updateSource } from '../api/client.ts';
 import { usePoll } from '../hooks/usePoll.ts';
@@ -8,20 +8,125 @@ import HotspotCard from '../components/HotspotCard.tsx';
 import Toggle from '../components/Toggle.tsx';
 import { BorderBeam } from '../components/ui/BorderBeam.tsx';
 import { FieldSelect } from '../components/ui/FieldSelect.tsx';
+import { GlareCard } from '../components/ui/GlareCard.tsx';
 import { Reveal } from '../components/ui/Reveal.tsx';
+
+function parseExtra(json: string): Record<string, unknown> {
+  try {
+    const o = JSON.parse(json || '{}') as unknown;
+    return o && typeof o === 'object' ? (o as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** 数据源行内配置编辑器：rss 编辑 feed 列表，github 调最低 Stars，bilibili 调分区 */
+function SourceConfigEditor({ s, onSaved, onNotice }: { s: Source; onSaved: () => void; onNotice: (m: string) => void }) {
+  const [initial] = useState(() => parseExtra(s.extraJson) as { feeds?: unknown[]; minStars?: number; searchKeywords?: unknown[]; searchThrottleMs?: number; searchLimit?: number; limit?: number });
+  const [feedsText, setFeedsText] = useState(() => (Array.isArray(initial.feeds) ? (initial.feeds as unknown[]).join('\n') : ''));
+  const [minStars, setMinStars] = useState(() => (initial.minStars != null ? String(initial.minStars) : ''));
+  const [searchKwText, setSearchKwText] = useState(() => (Array.isArray(initial.searchKeywords) ? (initial.searchKeywords as unknown[]).join(', ') : ''));
+  const [throttleSec, setThrottleSec] = useState(() => (initial.searchThrottleMs != null ? String(Math.round(initial.searchThrottleMs / 1000)) : ''));
+  const [limit, setLimit] = useState(() => (initial.limit != null ? String(initial.limit) : initial.searchLimit != null ? String(initial.searchLimit) : ''));
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    setBusy(true);
+    try {
+      const extra = parseExtra(s.extraJson);
+      if (s.sourceKey === 'rss') {
+        extra.feeds = feedsText.split('\n').map((f) => f.trim()).filter(Boolean);
+      } else if (s.sourceKey === 'github') {
+        if (minStars.trim() !== '') extra.minStars = Number(minStars);
+        if (limit.trim() !== '') extra.limit = Number(limit);
+      } else if (s.sourceKey === 'bilibili') {
+        if (searchKwText.trim() !== '') {
+          const kws = searchKwText.split(/[,，\n]+/).map((t) => t.trim()).filter(Boolean);
+          if (kws.length > 0) extra.searchKeywords = kws;
+        }
+        if (throttleSec.trim() !== '') extra.searchThrottleMs = Math.max(0, Math.round(Number(throttleSec) * 1000));
+        if (limit.trim() !== '') extra.searchLimit = Number(limit);
+      }
+      await updateSource(s.id, { extraJson: JSON.stringify(extra) });
+      onNotice(`${s.displayName} 配置已保存`);
+      onSaved();
+    } catch (e) {
+      onNotice(`保存失败：${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="glass rounded-lg p-3 mt-1 space-y-2">
+      {s.sourceKey === 'rss' && (
+        <>
+          <div className="font-mono2 text-[10px] text-slate-400">RSS feed 列表（一行一个）</div>
+          <textarea
+            value={feedsText}
+            onChange={(e) => setFeedsText(e.target.value)}
+            rows={Math.max(3, Math.min(7, feedsText.split('\n').length + 1))}
+            className="w-full bg-abyss/60 border border-slate-700 rounded-md px-2 py-1.5 text-[11px] text-slate-200 font-mono2 focus:outline-none focus:border-neon/50 resize-y"
+          />
+        </>
+      )}
+      {s.sourceKey === 'github' && (
+        <div className="flex gap-3 text-[11px]">
+          <label className="flex items-center gap-1.5 text-slate-400">
+            最低 Stars
+            <input value={minStars} onChange={(e) => setMinStars(e.target.value.replace(/\D/g, ''))} placeholder="500" className="w-20 bg-abyss/60 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono2 focus:outline-none focus:border-neon/50" />
+          </label>
+          <label className="flex items-center gap-1.5 text-slate-400">
+            条数
+            <input value={limit} onChange={(e) => setLimit(e.target.value.replace(/\D/g, ''))} placeholder="10" className="w-16 bg-abyss/60 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono2 focus:outline-none focus:border-neon/50" />
+          </label>
+        </div>
+      )}
+      {s.sourceKey === 'bilibili' && (
+        <div className="space-y-2 text-[11px]">
+          <label className="block text-slate-400">
+            搜索词（逗号分隔）
+            <input value={searchKwText} onChange={(e) => setSearchKwText(e.target.value)} placeholder="GPT,Claude,DeepSeek,大模型" className="mt-1 w-full bg-abyss/60 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono2 focus:outline-none focus:border-neon/50" />
+          </label>
+          <div className="flex gap-3">
+            <label className="flex items-center gap-1.5 text-slate-400">
+              节流(秒)
+              <input value={throttleSec} onChange={(e) => setThrottleSec(e.target.value.replace(/\D/g, ''))} placeholder="6" className="w-14 bg-abyss/60 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono2 focus:outline-none focus:border-neon/50" />
+            </label>
+            <label className="flex items-center gap-1.5 text-slate-400">
+              每词条数
+              <input value={limit} onChange={(e) => setLimit(e.target.value.replace(/\D/g, ''))} placeholder="10" className="w-16 bg-abyss/60 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono2 focus:outline-none focus:border-neon/50" />
+            </label>
+          </div>
+        </div>
+      )}
+      {!['rss', 'github', 'bilibili'].includes(s.sourceKey) && (
+        <div className="text-[10px] text-slate-500">该源暂无可编辑配置（可调开关与间隔）</div>
+      )}
+      <div className="flex items-center gap-2">
+        <button onClick={save} disabled={busy} className="px-3 py-1 rounded-md glass text-neon text-[11px] tracking-wider hover:border-neon/40 disabled:opacity-40 cursor-pointer transition-colors">
+          {busy ? '保存中…' : '保存'}
+        </button>
+        <button onClick={onSaved} className="px-3 py-1 rounded-md text-slate-400 text-[11px] hover:text-slate-200 cursor-pointer transition-colors">
+          取消
+        </button>
+      </div>
+    </div>
+  );
+}
 
 interface Props {
   hotspots: Hotspot[];
   refreshKey: number;
-  feedLimit: number;
-  onFeedLimit: (n: number) => void;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
   onNotice: (msg: string) => void;
 }
 
 const INTERVALS = [5, 10, 15, 30, 60];
-const FEED_SIZES = [30, 50, 80, 120];
 
-export default function Dashboard({ hotspots, refreshKey, feedLimit, onFeedLimit, onNotice }: Props) {
+export default function Dashboard({ hotspots, refreshKey, hasMore, loadingMore, onLoadMore, onNotice }: Props) {
   const statsPoll = usePoll(getStats, 8000, [refreshKey]);
   const sourcesPoll = usePoll(getSources, 8000, [refreshKey]);
   const aiPoll = usePoll(getAiSystem, 30000, [refreshKey]);
@@ -30,6 +135,7 @@ export default function Dashboard({ hotspots, refreshKey, feedLimit, onFeedLimit
   const [aiBusy, setAiBusy] = useState(false);
   const [aiResult, setAiResult] = useState<string | null>(null);
   const [notifyBusy, setNotifyBusy] = useState(false);
+  const [configuredSrc, setConfiguredSrc] = useState<number | null>(null);
 
   const stats = statsPoll.data;
   const sources = sourcesPoll.data ?? [];
@@ -112,6 +218,35 @@ export default function Dashboard({ hotspots, refreshKey, feedLimit, onFeedLimit
     }
   }
 
+  /** 触底加载：xl 面板内部滚动用 onScroll；<xl 页面滚动用哨兵离视口距离判定 */
+  const endRef = useRef<HTMLDivElement>(null);
+  const canLoadRef = useRef(true);
+  useEffect(() => {
+    canLoadRef.current = !loadingMore;
+  }, [loadingMore]);
+
+  const requestLoad = useCallback(() => {
+    if (!canLoadRef.current || !hasMore) return;
+    canLoadRef.current = false;
+    onLoadMore();
+  }, [hasMore, onLoadMore]);
+
+  function handleFeedScroll(e: UIEvent<HTMLDivElement>) {
+    const el = e.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 220) requestLoad();
+  }
+
+  useEffect(() => {
+    function onWinScroll() {
+      const el = endRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      if (r.top <= innerHeight + 220) requestLoad();
+    }
+    window.addEventListener('scroll', onWinScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onWinScroll);
+  }, [requestLoad]);
+
   const statsTiles = [
     { label: '热点', value: stats?.hotspots ?? '·', color: 'text-neon' },
     { label: '原始条目', value: stats?.items ?? '·', color: 'text-cyan' },
@@ -123,7 +258,8 @@ export default function Dashboard({ hotspots, refreshKey, feedLimit, onFeedLimit
     <div className="h-full flex flex-col space-y-5">
       {/* 首屏带：最新热点（信息扩容）+ 紧凑雷达 */}
       <Reveal className="shrink-0">
-        <section className="relative glass-strong rounded-2xl p-5 overflow-hidden">
+        <GlareCard className="rounded-2xl overflow-hidden">
+          <section className="relative glass-strong rounded-2xl p-5 overflow-hidden">
           <BorderBeam size={200} duration={14} anchor={90} />
           <div className="flex flex-wrap items-center gap-6">
             <div className="min-w-0 flex-1">
@@ -164,6 +300,7 @@ export default function Dashboard({ hotspots, refreshKey, feedLimit, onFeedLimit
             </div>
           </div>
         </section>
+        </GlareCard>
       </Reveal>
 
       {/* 主舱：右栏自然高度驱动页面；items-stretch 使左流面板拉满至右栏底边齐平，xl 下列表内部滚动 */}
@@ -185,11 +322,14 @@ export default function Dashboard({ hotspots, refreshKey, feedLimit, onFeedLimit
           <section className="glass rounded-2xl p-5 flex flex-col min-h-0 flex-1">
             <div className="mb-3 flex items-center justify-between shrink-0">
               <h2 className="hud-label text-[11px] text-slate-400">LIVE HOTSPOTS — 实时热点</h2>
-              <FieldSelect value={feedLimit} onChange={onFeedLimit} options={FEED_SIZES} title="每页展示条数" suffix="条" />
+              <span className="font-mono2 text-[11px] text-slate-500">
+                已加载 {hotspots.length}
+                {stats?.hotspots ? ` · 共 ${stats.hotspots}` : ''}
+              </span>
             </div>
             {/* 列表容器 absolute 脱离行高贡献：左栏不撑破栅格（行高由右栏决定），同时面板可拉满至右栏底边 */}
             <div className="relative min-h-0 flex-1">
-              <div className="overflow-y-auto overflow-x-hidden pr-1 xl:absolute xl:inset-0">
+              <div className="overflow-y-auto overflow-x-hidden pr-1 xl:absolute xl:inset-0" onScroll={handleFeedScroll}>
                 <div className="space-y-3">
                 {hotspots.length === 0 ? (
                   <div className="py-16 text-center text-sm text-slate-500">
@@ -204,13 +344,30 @@ export default function Dashboard({ hotspots, refreshKey, feedLimit, onFeedLimit
                   ))
                 )}
                 </div>
+                {hotspots.length > 0 && (
+                  <div ref={endRef} className="pt-2 pb-1">
+                    {loadingMore ? (
+                      <div className="text-center text-xs text-slate-500 py-2">加载中…</div>
+                    ) : hasMore ? (
+                      <button
+                        onClick={onLoadMore}
+                        className="w-full text-center font-mono2 text-[11px] text-neon/80 hover:text-neon py-2 cursor-pointer disabled:opacity-40"
+                      >
+                        加载更多（已显示 {hotspots.length} 条）
+                      </button>
+                    ) : (
+                      <div className="text-center font-mono2 text-[11px] text-slate-600 py-2">已全部加载 {hotspots.length} 条</div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </section>
         </div>
 
-        {/* 右：控制塔（数据源/三道关/通知日志，全内容平铺、无内部滚动条） */}
-        <aside className="flex flex-col gap-4 min-w-0">
+        {/* 右：控制塔（数据源/三道关/通知日志，全内容平铺、无内部滚动条），玻璃反光环绕 */}
+        <GlareCard className="min-w-0 rounded-2xl overflow-hidden">
+          <aside className="flex flex-col gap-4 min-w-0 h-full">
           <section className="glass rounded-2xl p-4 shrink-0">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="hud-label text-[11px] text-slate-400">DATA SOURCES — 数据源</h2>
@@ -223,22 +380,45 @@ export default function Dashboard({ hotspots, refreshKey, feedLimit, onFeedLimit
                 <div className="text-sm text-slate-500 py-4 text-center">加载数据源中……</div>
               ) : (
                 sources.map((s) => (
-                  <div key={s.id} className="glass rounded-lg px-3 py-1.5 flex items-center gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm text-slate-200 truncate">{s.displayName}</div>
-                      <div className="font-mono2 text-[10px] text-slate-500 truncate">
-                        {s.sourceKey} · {s.lastRunAt ? `上次 ${relTime(s.lastRunAt)}` : '未运行'}
+                  <div key={s.id} className="space-y-1">
+                    <div className="glass rounded-lg px-3 py-1.5 flex items-center gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm text-slate-200 truncate">{s.displayName}</div>
+                        <div className="font-mono2 text-[10px] text-slate-500 truncate">
+                          {s.sourceKey} · {s.lastRunAt ? `上次 ${relTime(s.lastRunAt)}` : '未运行'}
+                        </div>
                       </div>
+                      <button
+                        onClick={() => setConfiguredSrc(configuredSrc === s.id ? null : s.id)}
+                        className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border transition-colors cursor-pointer ${
+                          configuredSrc === s.id
+                            ? 'border-neon/50 text-neon'
+                            : 'border-slate-600/60 text-slate-400 hover:text-slate-200 hover:border-slate-400'
+                        }`}
+                        title="编辑源配置"
+                      >
+                        配置
+                      </button>
+                      <FieldSelect
+                        value={s.intervalMinutes}
+                        onChange={(n) => setInterval(s, n)}
+                        options={INTERVALS}
+                        title="轮询间隔（分钟）"
+                        suffix="m"
+                        className="shrink-0"
+                      />
+                      <Toggle on={s.enabled} onChange={(v) => setEnabled(s, v)} />
                     </div>
-                    <FieldSelect
-                      value={s.intervalMinutes}
-                      onChange={(n) => setInterval(s, n)}
-                      options={INTERVALS}
-                      title="轮询间隔（分钟）"
-                      suffix="m"
-                      className="shrink-0"
-                    />
-                    <Toggle on={s.enabled} onChange={(v) => setEnabled(s, v)} />
+                    {configuredSrc === s.id && (
+                      <SourceConfigEditor
+                        s={s}
+                        onSaved={() => {
+                          setConfiguredSrc(null);
+                          sourcesPoll.reload();
+                        }}
+                        onNotice={onNotice}
+                      />
+                    )}
                   </div>
                 ))
               )}
@@ -319,7 +499,8 @@ export default function Dashboard({ hotspots, refreshKey, feedLimit, onFeedLimit
               )}
             </ul>
           </div>
-        </aside>
+          </aside>
+        </GlareCard>
       </div>
     </div>
   );
