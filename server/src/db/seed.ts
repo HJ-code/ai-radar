@@ -23,7 +23,12 @@ const defaultSources = [
   },
   { sourceKey: 'googlenews', displayName: 'Google News', intervalMinutes: 30, extraJson: '{}' },
   { sourceKey: 'huggingface', displayName: 'Hugging Face 模型热榜', intervalMinutes: 60, extraJson: '{}' },
-  { sourceKey: 'bilibili', displayName: 'B站 科技/AI 视频', intervalMinutes: 60, extraJson: '{"rid":188,"limit":20}' },
+  {
+    sourceKey: 'bilibili',
+    displayName: 'B站 科技/AI 视频',
+    intervalMinutes: 60,
+    extraJson: '{"searchKeywords":["GPT","Claude","DeepSeek","OpenAI","Gemini","大模型"],"searchLimit":10,"totalLimit":60,"searchThrottleMs":6000}',
+  },
 ];
 
 const defaultRanges = [
@@ -109,11 +114,34 @@ export function ensureRuntimeSources(): void {
     }
   }
 
-  const hasBili = db.prepare(`SELECT id FROM sources WHERE source_key = 'bilibili' LIMIT 1`).get();
-  if (!hasBili) {
+  const biliRow = db.prepare(`SELECT id, extra_json FROM sources WHERE source_key = 'bilibili' ORDER BY id LIMIT 1`).get() as
+    | { id: number; extra_json: string }
+    | undefined;
+  const biliDefault = {
+    searchKeywords: ['GPT', 'Claude', 'DeepSeek', 'OpenAI', 'Gemini', '大模型'],
+    searchLimit: 10,
+    totalLimit: 60,
+    searchThrottleMs: 6000,
+  };
+  if (biliRow) {
+    let extra: Record<string, unknown> = {};
+    try {
+      const parsed = JSON.parse(biliRow.extra_json || '{}');
+      if (parsed && typeof parsed === 'object') extra = parsed as Record<string, unknown>;
+    } catch {
+      /* 保留原值 */
+    }
+    if (!Array.isArray(extra.searchKeywords) || (extra.searchKeywords as unknown[]).length === 0) {
+      const next = JSON.stringify({ ...extra, ...biliDefault });
+      if (next !== biliRow.extra_json) {
+        db.prepare('UPDATE sources SET extra_json = ? WHERE id = ?').run(next, biliRow.id);
+        console.log('[seed] bilibili 源已补缺搜索配置');
+      }
+    }
+  } else {
     db.prepare(
-      "INSERT INTO sources (source_key, display_name, enabled, interval_minutes, last_run_at, extra_json) VALUES ('bilibili', 'B站 科技/AI 视频', 1, 60, NULL, '{\"rid\":188,\"limit\":20}')",
-    ).run();
+      "INSERT INTO sources (source_key, display_name, enabled, interval_minutes, last_run_at, extra_json) VALUES ('bilibili', 'B站 科技/AI 视频', 1, 60, NULL, ?)",
+    ).run(JSON.stringify(biliDefault));
     console.log('[seed] 已新增 B站 数据源');
   }
 }
