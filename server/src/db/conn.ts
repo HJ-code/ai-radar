@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS hotspots (
   author TEXT,
   hot_score INTEGER NOT NULL DEFAULT 0,
   range_name TEXT,
+  engagement_magnitude INTEGER NOT NULL DEFAULT 0,
   ai_status TEXT NOT NULL DEFAULT 'unscored',
   ai_relevance INTEGER NOT NULL DEFAULT 0,
   summary_zh TEXT,
@@ -98,10 +99,21 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE INDEX IF NOT EXISTS idx_items_published  ON items(published_at);
 CREATE INDEX IF NOT EXISTS idx_items_query      ON items(query);
 CREATE INDEX IF NOT EXISTS idx_hotspots_published ON hotspots(published_at);
+CREATE INDEX IF NOT EXISTS idx_hotspots_engagement ON hotspots(engagement_magnitude);
 CREATE INDEX IF NOT EXISTS idx_alert_trigered   ON alert_logs(triggered_at);
 `;
 
+/** 幂等迁移：为旧库的 hotspots 补 engagement_magnitude 列（存量先置 0，由启动回填填充）。必须在执行 schema（含其索引）之前调用。 */
+function migrateHotspotEngagementColumn(): void {
+  const cols = db.prepare(`PRAGMA table_info(hotspots)`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === 'engagement_magnitude')) {
+    db.exec('ALTER TABLE hotspots ADD COLUMN engagement_magnitude INTEGER NOT NULL DEFAULT 0');
+  }
+}
+
 export function migrate(): void {
+  // 先补列再跑建表/建索引（schema 中的 idx_hotspots_engagement 依赖该列）
+  migrateHotspotEngagementColumn();
   db.exec(schema);
 }
 

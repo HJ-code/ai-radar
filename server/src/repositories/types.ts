@@ -59,6 +59,7 @@ export interface HotspotRow {
   sourceKey: string;
   author: string | null;
   hotScore: number;
+  engagementMagnitude: number;
   rangeName: string | null;
   aiStatus: string;
   aiRelevance: number;

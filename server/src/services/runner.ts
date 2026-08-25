@@ -121,8 +121,9 @@ export async function runOnce(opts: { force?: boolean } = {}): Promise<RunResult
   }
 
   // 采集完成后跑 AI 三道关（未配置或失败时降级为规则相关度）
+  // 手动触发（force）时忽略冷却并尽量把待处理队列处理完；调度器自动轮询保持冷却节流
   try {
-    const ai = await processPendingItems();
+    const ai = await processPendingItems({ skipCooldown: force });
     result.aiProcessed = ai.processed;
   } catch (err) {
     result.errors.push(`ai-pipeline: ${(err as Error).message}`);
