@@ -22,11 +22,12 @@ function parseExtra(json: string): Record<string, unknown> {
 
 /** 数据源行内配置编辑器：rss 编辑 feed 列表，github 调最低 Stars，bilibili 调分区 */
 function SourceConfigEditor({ s, onSaved, onNotice }: { s: Source; onSaved: () => void; onNotice: (m: string) => void }) {
-  const [initial] = useState(() => parseExtra(s.extraJson) as { feeds?: unknown[]; minStars?: number; rid?: number; limit?: number });
+  const [initial] = useState(() => parseExtra(s.extraJson) as { feeds?: unknown[]; minStars?: number; searchKeywords?: unknown[]; searchThrottleMs?: number; searchLimit?: number; limit?: number });
   const [feedsText, setFeedsText] = useState(() => (Array.isArray(initial.feeds) ? (initial.feeds as unknown[]).join('\n') : ''));
   const [minStars, setMinStars] = useState(() => (initial.minStars != null ? String(initial.minStars) : ''));
-  const [rid, setRid] = useState(() => (initial.rid != null ? String(initial.rid) : ''));
-  const [limit, setLimit] = useState(() => (initial.limit != null ? String(initial.limit) : ''));
+  const [searchKwText, setSearchKwText] = useState(() => (Array.isArray(initial.searchKeywords) ? (initial.searchKeywords as unknown[]).join(', ') : ''));
+  const [throttleSec, setThrottleSec] = useState(() => (initial.searchThrottleMs != null ? String(Math.round(initial.searchThrottleMs / 1000)) : ''));
+  const [limit, setLimit] = useState(() => (initial.limit != null ? String(initial.limit) : initial.searchLimit != null ? String(initial.searchLimit) : ''));
   const [busy, setBusy] = useState(false);
 
   async function save() {
@@ -39,8 +40,12 @@ function SourceConfigEditor({ s, onSaved, onNotice }: { s: Source; onSaved: () =
         if (minStars.trim() !== '') extra.minStars = Number(minStars);
         if (limit.trim() !== '') extra.limit = Number(limit);
       } else if (s.sourceKey === 'bilibili') {
-        if (rid.trim() !== '') extra.rid = Number(rid);
-        if (limit.trim() !== '') extra.limit = Number(limit);
+        if (searchKwText.trim() !== '') {
+          const kws = searchKwText.split(/[,，\n]+/).map((t) => t.trim()).filter(Boolean);
+          if (kws.length > 0) extra.searchKeywords = kws;
+        }
+        if (throttleSec.trim() !== '') extra.searchThrottleMs = Math.max(0, Math.round(Number(throttleSec) * 1000));
+        if (limit.trim() !== '') extra.searchLimit = Number(limit);
       }
       await updateSource(s.id, { extraJson: JSON.stringify(extra) });
       onNotice(`${s.displayName} 配置已保存`);
@@ -78,15 +83,21 @@ function SourceConfigEditor({ s, onSaved, onNotice }: { s: Source; onSaved: () =
         </div>
       )}
       {s.sourceKey === 'bilibili' && (
-        <div className="flex gap-3 text-[11px]">
-          <label className="flex items-center gap-1.5 text-slate-400">
-            分区 rid
-            <input value={rid} onChange={(e) => setRid(e.target.value.replace(/\D/g, ''))} placeholder="188" className="w-20 bg-abyss/60 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono2 focus:outline-none focus:border-neon/50" />
+        <div className="space-y-2 text-[11px]">
+          <label className="block text-slate-400">
+            搜索词（逗号分隔）
+            <input value={searchKwText} onChange={(e) => setSearchKwText(e.target.value)} placeholder="GPT,Claude,DeepSeek,大模型" className="mt-1 w-full bg-abyss/60 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono2 focus:outline-none focus:border-neon/50" />
           </label>
-          <label className="flex items-center gap-1.5 text-slate-400">
-            条数
-            <input value={limit} onChange={(e) => setLimit(e.target.value.replace(/\D/g, ''))} placeholder="20" className="w-16 bg-abyss/60 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono2 focus:outline-none focus:border-neon/50" />
-          </label>
+          <div className="flex gap-3">
+            <label className="flex items-center gap-1.5 text-slate-400">
+              节流(秒)
+              <input value={throttleSec} onChange={(e) => setThrottleSec(e.target.value.replace(/\D/g, ''))} placeholder="6" className="w-14 bg-abyss/60 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono2 focus:outline-none focus:border-neon/50" />
+            </label>
+            <label className="flex items-center gap-1.5 text-slate-400">
+              每词条数
+              <input value={limit} onChange={(e) => setLimit(e.target.value.replace(/\D/g, ''))} placeholder="10" className="w-16 bg-abyss/60 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono2 focus:outline-none focus:border-neon/50" />
+            </label>
+          </div>
         </div>
       )}
       {!['rss', 'github', 'bilibili'].includes(s.sourceKey) && (
