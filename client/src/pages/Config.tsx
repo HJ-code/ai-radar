@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { addKeyword, addRange, getKeywords, getRanges, removeKeyword, removeRange, updateKeyword, updateRange } from '../api/client.ts';
 import { usePoll } from '../hooks/usePoll.ts';
 import Toggle from '../components/Toggle.tsx';
+import { GlareCard } from '../components/ui/GlareCard.tsx';
 import { Tabs, type TabItem } from '../components/ui/Tabs.tsx';
 
 interface Props {
@@ -209,8 +210,10 @@ export default function Config({ refreshKey, onNotice }: Props) {
   ];
 
   return (
-    <div className="glass-strong rounded-2xl p-6">
-      <Tabs tabs={tabs} defaultActive="keywords" />
-    </div>
+    <GlareCard className="rounded-2xl overflow-hidden">
+      <section className="relative glass-strong rounded-2xl p-6 overflow-hidden">
+        <Tabs tabs={tabs} defaultActive="keywords" />
+      </section>
+    </GlareCard>
   );
 }

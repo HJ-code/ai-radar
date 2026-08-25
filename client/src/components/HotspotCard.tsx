@@ -9,6 +9,7 @@ interface Props {
   now: number;
   onShare: (h: Hotspot) => void;
   keywords?: string[];
+  onTagClick?: (kind: 'source' | 'range' | 'keyword', value: string) => void;
 }
 
 function CopyIcon() {
@@ -28,7 +29,7 @@ function ExternalIcon() {
   );
 }
 
-export default function HotspotCard({ h, now, onShare, keywords }: Props) {
+export default function HotspotCard({ h, now, onShare, keywords, onTagClick }: Props) {
   const summary = h.summaryZh?.trim();
   // RSS 等资讯型源结构性无互动量，不做“热度”伪装
   const newsType = h.sourceKey === 'rss';
@@ -42,15 +43,39 @@ export default function HotspotCard({ h, now, onShare, keywords }: Props) {
     e.stopPropagation();
   }
 
+  function fmtMag(n: number): string {
+    if (!n) return '';
+    if (n >= 10000) return `${(n / 10000).toFixed(1)}w`;
+    return String(n);
+  }
+
+  const tagCls =
+    'font-mono2 text-[9px] rounded px-1.5 py-px cursor-pointer transition-colors hover:brightness-125';
+
   return (
     <CardSpotlight radius={220} color={h.aiStatus === 'real' ? '#34d399' : '#38e8ff'} className="rounded-2xl">
       <article className="glass rounded-2xl px-4 py-3 flex flex-col gap-1.5 h-full hover:border-neon/30 transition-colors">
         <div className="flex items-center gap-2">
           <AiBadge status={h.aiStatus} />
-          <span className="hud-label text-[9px] text-slate-500">{h.sourceKey}</span>
+          {onTagClick ? (
+            <button
+              onClick={(e) => { stop(e); onTagClick('source', h.sourceKey); }}
+              title="点击按此来源筛选"
+              className="hud-label text-[9px] text-slate-500 hover:text-neon cursor-pointer"
+            >
+              {h.sourceKey}
+            </button>
+          ) : (
+            <span className="hud-label text-[9px] text-slate-500">{h.sourceKey}</span>
+          )}
           {newsType && (
             <span className="font-mono2 text-[9px] text-slate-400 border border-slate-500/30 bg-slate-500/10 rounded px-1 py-px">
               资讯
+            </span>
+          )}
+          {h.engagementMagnitude > 0 && (
+            <span className={`${tagCls} border border-white/10 bg-white/5 text-slate-400`} title="互动量">
+              互动 {fmtMag(h.engagementMagnitude)}
             </span>
           )}
           {isHot && (
@@ -61,18 +86,31 @@ export default function HotspotCard({ h, now, onShare, keywords }: Props) {
           <span className="ml-auto font-mono2 text-[10px] text-slate-500">{relTime(h.createdAt, now)}</span>
         </div>
 
-        {/* 命中的监控配置点：监控范围 + 追踪关键词 */}
+        {/* 命中的监控配置点：监控范围 + 追踪关键词（可点击筛选） */}
         {(h.rangeName || kw.length > 0) && (
           <div className="flex flex-wrap gap-1.5">
             {h.rangeName && (
-              <span className="font-mono2 text-[9px] text-neon/80 border border-neon/25 bg-neon/5 rounded px-1.5 py-px">
+              <button
+                type="button"
+                disabled={!onTagClick}
+                onClick={(e) => { stop(e); onTagClick?.('range', h.rangeName!); }}
+                className={`${tagCls} border border-neon/25 bg-neon/5 text-neon/80 ${onTagClick ? 'cursor-pointer' : 'cursor-default'}`}
+                title={onTagClick ? '点击按此范围筛选' : undefined}
+              >
                 范围 · {h.rangeName}
-              </span>
+              </button>
             )}
             {kw.map((k) => (
-              <span key={k} className="font-mono2 text-[9px] text-signal border border-signal/30 bg-signal/5 rounded px-1.5 py-px">
+              <button
+                key={k}
+                type="button"
+                disabled={!onTagClick}
+                onClick={(e) => { stop(e); onTagClick?.('keyword', k); }}
+                className={`${tagCls} border border-signal/30 bg-signal/5 text-signal ${onTagClick ? 'cursor-pointer' : 'cursor-default'}`}
+                title={onTagClick ? '点击搜索关键词' : undefined}
+              >
                 关键词 · {k}
-              </span>
+              </button>
             ))}
           </div>
         )}
