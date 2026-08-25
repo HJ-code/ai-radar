@@ -24,10 +24,11 @@ const SYSTEM_PROMPT = `你是一个 AI 热点「真伪鉴别 + 相关度评估 +
 
 随后：
 - summary：≤60 字的客观中文摘要；
-- reasons：一句简短判定理由（中文，≤30 字）；real 时简述来源/依据，doubtful 时说明缺什么证据。
+- reasons：一句简短判定理由（中文，≤30 字）；real 时简述来源/依据，doubtful 时说明缺什么证据；
+- relevance_reason：一句简短相关度理由（中文，≤30 字），说明该内容为何与「监控范围/关键词」相关——主体相关时用「主体即…」表述，仅提及/无关时明确写「主体无关/仅提及」并给低分。
 
 只输出一个 JSON 对象，不要输出任何其他文字或代码块标记：
-{"verdict": "real|doubtful|fake", "relevance": 0到100的整数, "summary": "中文摘要", "reasons": "判定理由"}`;
+{"verdict": "real|doubtful|fake", "relevance": 0到100的整数, "summary": "中文摘要", "reasons": "判定理由", "relevance_reason": "相关度理由"}`;
 
 /** 把一条候选内容 + 监控范围组装成两轮对话，供单次请求完成真伪/相关/摘要三道关 */
 export function buildAnalysisMessages(item: AnalysisItemCtx, scope: ScopeCtx): ChatMessage[] {

@@ -1,14 +1,14 @@
 import { config } from './config.ts';
 import { migrate } from './db/conn.ts';
 import { seed } from './db/seed.ts';
-import { backfillEngagementMagnitude } from './repositories/hotspots.ts';
+import { backfillHotspotDetails } from './repositories/hotspots.ts';
 import { createApp } from './app.ts';
 import { startScheduler } from './services/scheduler.ts';
 
 migrate();
 seed();
-const backfilled = backfillEngagementMagnitude();
-if (backfilled > 0) console.log(`[hotspot] 互动量回填 ${backfilled} 条热点`);
+const backfilled = backfillHotspotDetails();
+if (backfilled > 0) console.log(`[hotspot] 热点互动详情回填 ${backfilled} 条`);
 
 const app = createApp();
 app.listen(config.port, () => {

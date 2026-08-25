@@ -133,7 +133,8 @@ export function normalizeAnalysis(raw: unknown): AiAnalysis {
   const relevance = Math.max(0, Math.min(100, Math.round(Number(o.relevance) || 0)));
   const summary = typeof o.summary === 'string' ? o.summary.slice(0, 80) : '';
   const reasons = typeof o.reasons === 'string' ? o.reasons.slice(0, 80) : '';
-  return { verdict, relevance, summary, reasons };
+  const relevanceReason = typeof o.relevance_reason === 'string' ? o.relevance_reason.slice(0, 80) : '';
+  return { verdict, relevance, summary, reasons, relevanceReason };
 }
 
 /** 各交互型源的互动准入门槛；数值可被源 extraJson 的 min<字段> 覆盖。RSS 等资讯型源不在此表内 → 豁免。 */
@@ -213,7 +214,14 @@ function hotScoreFor(relevance: number, magnitude: number, verdict?: AiVerdict):
   return verdict === 'doubtful' ? Math.round(base * 0.5) : base;
 }
 
-function persistHotspot(item: ItemRow, aiStatus: string, aiRelevance: number, summaryZh: string | null, verdict?: AiVerdict): { inserted: boolean; id: number } | null {
+function persistHotspot(
+  item: ItemRow,
+  aiStatus: string,
+  aiRelevance: number,
+  summaryZh: string | null,
+  aiReasons: string | null,
+  verdict?: AiVerdict,
+): { inserted: boolean; id: number } | null {
   if (!item.url) return null;
   return insertHotspotIfAbsent({
     itemId: item.id,
@@ -224,6 +232,8 @@ function persistHotspot(item: ItemRow, aiStatus: string, aiRelevance: number, su
     author: item.author,
     hotScore: hotScoreFor(aiRelevance, engagementMagnitude(item.engagementJson), verdict),
     engagementMagnitude: engagementMagnitude(item.engagementJson),
+    engagementJson: item.engagementJson,
+    aiReasons,
     rangeName: bestRangeName(item),
     aiStatus,
     aiRelevance,
@@ -266,7 +276,8 @@ async function maybeNotify(item: ItemRow, hotspotId: number, a: AiAnalysis): Pro
 async function applyAi(item: ItemRow, a: AiAnalysis, gatePass: boolean): Promise<void> {
   updateItemAi(item.id, { aiStatus: a.verdict, aiRelevance: a.relevance, summaryZh: a.summary || null });
   if (a.verdict === 'fake' || a.relevance < config.ai.minRelevance || !gatePass) return;
-  const hs = persistHotspot(item, a.verdict, a.relevance, a.summary || null, a.verdict);
+  const aiReasons = JSON.stringify({ verdict: a.reasons, relevance: a.relevanceReason });
+  const hs = persistHotspot(item, a.verdict, a.relevance, a.summary || null, aiReasons, a.verdict);
   if (!hs) return;
   if (hs.inserted && a.verdict === 'real' && !item.notified) {
     await maybeNotify(item, hs.id, a);
@@ -278,7 +289,7 @@ function applyRules(item: ItemRow, scope: ScopeCtx, gatePass: boolean): void {
   const relevance = ruleRelevance(item, scope);
   updateItemAi(item.id, { aiStatus: 'unscored', aiRelevance: relevance, summaryZh: null });
   if (relevance < config.ai.minRelevance || !gatePass) return;
-  persistHotspot(item, 'unscored', relevance, null);
+  persistHotspot(item, 'unscored', relevance, null, null);
 }
 
 /** 处理一批（最多 maxPerRun 条）：AI 三道关或规则降级；不检查冷却（由上层决定） */

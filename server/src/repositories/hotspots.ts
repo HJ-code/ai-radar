@@ -13,6 +13,8 @@ export function mapHotspot(r: Record<string, unknown>): HotspotRow {
     author: (r.author as string | null) ?? null,
     hotScore: (r.hot_score as number) ?? 0,
     engagementMagnitude: (r.engagement_magnitude as number) ?? 0,
+    engagementJson: (r.engagement_json as string) ?? '{}',
+    aiReasons: (r.ai_reasons as string | null) ?? null,
     rangeName: (r.range_name as string | null) ?? null,
     aiStatus: (r.ai_status as string) ?? 'unscored',
     aiRelevance: (r.ai_relevance as number) ?? 0,
@@ -31,6 +33,8 @@ export interface NewHotspot {
   author: string | null;
   hotScore: number;
   engagementMagnitude: number;
+  engagementJson: string;
+  aiReasons: string | null;
   rangeName: string | null;
   aiStatus: string;
   aiRelevance: number;
@@ -43,27 +47,36 @@ export function insertHotspotIfAbsent(h: NewHotspot): { inserted: boolean; id: n
   const info = db
     .prepare(
       `INSERT OR IGNORE INTO hotspots
-        (item_id, title, text, url, source_key, author, hot_score, range_name, ai_status, ai_relevance, summary_zh, published_at, created_at, engagement_magnitude)
-       VALUES (:ii, :t, :tx, :u, :sk, :a, :hs, :rn, :st, :re, :sz, :pa, :ca, :em)`,
+        (item_id, title, text, url, source_key, author, hot_score, range_name, ai_status, ai_relevance, summary_zh, published_at, created_at, engagement_magnitude, engagement_json, ai_reasons)
+       VALUES (:ii, :t, :tx, :u, :sk, :a, :hs, :rn, :st, :re, :sz, :pa, :ca, :em, :ej, :ar)`,
     )
     .run({
       ii: h.itemId, t: h.title, tx: h.text, u: h.url, sk: h.sourceKey, a: h.author,
       hs: h.hotScore, rn: h.rangeName, st: h.aiStatus, re: h.aiRelevance, sz: h.summaryZh,
-      pa: h.publishedAt, ca: new Date().toISOString(), em: h.engagementMagnitude,
+      pa: h.publishedAt, ca: new Date().toISOString(), em: h.engagementMagnitude, ej: h.engagementJson, ar: h.aiReasons,
     });
   return { inserted: info.changes > 0, id: Number(info.lastInsertRowid) };
 }
 
-/** 回填：为 item_id 非空但互动量未记录的存量热点，从 items.engagement_json 反算写入 */
-export function backfillEngagementMagnitude(): number {
+/** 回填：为 item_id 非空但缺少互动信息的存量热点，从 items.engagement_json 补 engagement_magnitude/engagement_json。
+ *  ai_reasons 无法回填（不重跑 AI），由前端空值隐藏。 */
+export function backfillHotspotDetails(): number {
   const rows = db
-    .prepare(`SELECT h.id AS hid, i.engagement_json AS ej FROM hotspots h LEFT JOIN items i ON i.id = h.item_id WHERE h.item_id IS NOT NULL AND h.engagement_magnitude = 0`)
-    .all() as { hid: number; ej: string | null }[];
-  const upd = db.prepare('UPDATE hotspots SET engagement_magnitude = ? WHERE id = ?');
+    .prepare(
+      `SELECT h.id AS hid, i.engagement_json AS ej, h.engagement_json AS hj, h.engagement_magnitude AS mag
+       FROM hotspots h LEFT JOIN items i ON i.id = h.item_id
+       WHERE h.item_id IS NOT NULL AND (h.engagement_magnitude = 0 OR h.engagement_json = '{}')`,
+    )
+    .all() as { hid: number; ej: string | null; hj: string; mag: number }[];
+  const upd = db.prepare('UPDATE hotspots SET engagement_magnitude = ?, engagement_json = ? WHERE id = ?');
   let n = 0;
   for (const r of rows) {
-    const m = engagementMagnitude(r.ej ?? '{}');
-    if (m > 0) { upd.run(m, r.hid); n += 1; }
+    const computed = engagementMagnitude(r.ej ?? '{}');
+    const json = r.ej && r.ej !== '{}' ? r.ej : r.hj;
+    if (computed > 0 || json !== r.hj) {
+      upd.run(Math.max(r.mag, computed), json, r.hid);
+      n += 1;
+    }
   }
   return n;
 }

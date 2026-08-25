@@ -50,6 +50,29 @@ function topicHitFor(h: { title: string; text: string | null; url: string }, key
   return hay.includes(kw);
 }
 
+/** 解析互动细分 JSON；非对象/损坏返回空对象 */
+function parseEngagement(raw: string | null): Record<string, unknown> {
+  try {
+    const o = raw && raw !== '{}' ? JSON.parse(raw) : null;
+    return o && typeof o === 'object' ? (o as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** 解析 AI 依据 JSON（`{"verdict":..,"relevance":..}`）；无则返回 null，前端隐藏折叠区 */
+function parseAiReasons(raw: string | null): { verdict?: string; relevance?: string } | null {
+  if (!raw) return null;
+  try {
+    const o = JSON.parse(raw) as Record<string, unknown>;
+    const verdict = typeof o.verdict === 'string' && o.verdict ? o.verdict : undefined;
+    const relevance = typeof o.relevance === 'string' && o.relevance ? o.relevance : undefined;
+    return verdict || relevance ? { verdict, relevance } : null;
+  } catch {
+    return null;
+  }
+}
+
 router.get('/hotspots', (req, res) => {
   const keywords = listEnabledKeywords()
     .map((k) => k.keyword.trim())
@@ -93,6 +116,8 @@ router.get('/hotspots', (req, res) => {
   res.json({
     items: items.map((h) => ({
       ...h,
+      engagement: parseEngagement(h.engagementJson),
+      aiReasons: parseAiReasons(h.aiReasons),
       keywords: keywords.filter((k) => topicHitFor(h, k)),
     })),
     next,
